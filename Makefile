@@ -4,6 +4,7 @@ lint:
 	mypy lm
 
 fmt:
+	ruff format lm
 	ruff check --fix lm
 	ruff format lm
 
