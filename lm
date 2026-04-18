@@ -104,6 +104,8 @@ def _run_inference(prompt: str) -> None:
         if event["event"]["delta"]["type"] != "text_delta":
             continue
         sys.stdout.write(event["event"]["delta"]["text"])
+        sys.stdout.flush()
+    sys.stdout.write("\n")
     process.wait()
     if process.returncode != 0:
         sys.exit(process.returncode)
