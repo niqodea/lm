@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""CLI tool for interacting with Claude from the terminal."""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+CONFIG_PATH = Path.home() / ".config" / "lm"
+PROMPTS_PATH = CONFIG_PATH / "prompts"
+EMPTY_PATH = CONFIG_PATH / ".empty"
+
+CONTEXT_SECTION_HEADER = "lm Context"
+
+SYSTEM_PROMPT = f"""
+You are a helpful assistant. Answer the question concisely. \
+Contextual information is provided after in the `{CONTEXT_SECTION_HEADER}` section.
+"""
+
+
+def main() -> None:
+    """Entry point for the lm CLI."""
+    parser = argparse.ArgumentParser(prog="lm")
+    parser.add_argument(
+        "--preset",
+        help="prompt name (maps to ~/.config/lm/presets/<name>.md)",
+        type=str,
+    )
+    args = parser.parse_args()
+    preset: str | None = args.preset
+
+    with tempfile.NamedTemporaryFile(suffix=".md") as prompt_file:
+        prompt_path = Path(prompt_file.name)
+
+        if preset is not None:
+            preset_path = PROMPTS_PATH / f"{preset}.md"
+            if not preset_path.exists():
+                sys.exit(f"Preset not found: {preset_path}")
+            initial_prompt = preset_path.read_text()
+            prompt_path.write_text(initial_prompt)
+
+        if not sys.stdin.isatty():
+            context = sys.stdin.read()
+            with prompt_path.open("a") as f:
+                f.write(f"\n\n# {CONTEXT_SECTION_HEADER}\n\n{context}")
+
+        editor = os.environ.get("EDITOR", "vim")
+        with Path("/dev/tty").open() as tty:
+            subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
+                [editor, str(prompt_path)],
+                stdin=tty,
+                stdout=sys.stdout,
+                stderr=sys.stderr,
+                check=True,
+            )
+        prompt = prompt_path.read_text()
+
+    if prompt.strip() == "":
+        sys.exit("Prompt is empty, exiting.")
+
+    _run_inference(prompt)
+
+
+def _run_inference(prompt: str) -> None:
+    # --bare / CLAUDE_CODE_SIMPLE disables OAuth and routes billing to API
+    # As a hack, we run the process inside an empty directory in ~/.config/lm/.empty
+    # to avoid Claude picking up any CLAUDE.md
+    if not EMPTY_PATH.exists():
+        EMPTY_PATH.mkdir()
+
+    process = subprocess.Popen(  # noqa: S603  (prompt from user expected to be safe)
+        [  # noqa: S607  (claude from PATH expected to be safe)
+            "claude",
+            prompt,
+            # Make it stateless
+            "--system-prompt",
+            SYSTEM_PROMPT,
+            "--print",
+            "--no-session-persistence",
+            "--tools",
+            "",
+            # For response streaming
+            "--include-partial-messages",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+        ],
+        cwd=EMPTY_PATH,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+
+    if process.stdout is None:
+        sys.exit("Unexpected error: Claude stdout not captured")
+    for line in process.stdout:
+        event = json.loads(line)
+        if event["type"] != "stream_event":
+            continue
+        if event["event"]["type"] != "content_block_delta":
+            continue
+        if event["event"]["delta"]["type"] != "text_delta":
+            continue
+        sys.stdout.write(event["event"]["delta"]["text"])
+    process.wait()
+    if process.returncode != 0:
+        sys.exit(process.returncode)
+
+
+if __name__ == "__main__":
+    main()
