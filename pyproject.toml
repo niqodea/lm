@@ -8,4 +8,15 @@ extra_checks = true
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["COM812", "D203", "D212"]  # to avoid conflicts with formatter & other rules
+ignore = [
+  # to avoid conflicts with formatter & other rules
+  "COM812",
+  "D203",
+  "D212",
+  # Too opinionated on TODOs
+  "FIX002",
+  "TD",
+  # Too opinionated on complexity
+  "C901",
+  "PLR0915",
+]  

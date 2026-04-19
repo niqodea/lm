@@ -3,6 +3,7 @@
 
 import argparse
 import datetime
+import io
 import json
 import os
 import subprocess
@@ -12,11 +13,13 @@ from pathlib import Path
 CONFIG_PATH = Path.home() / ".config" / "lm"
 PROMPTS_PATH = CONFIG_PATH / "prompts"
 THREADS_PATH = CONFIG_PATH / "threads"
+EMPTY_CWD_PATH = CONFIG_PATH / ".empty-cwd"
 
-QUERY_PATHNAME = "00A.md"
-ANSWER_PATHNAME = "00B.md"
+QUERY_EDITMSG_PATHNAME = ".QUERY_EDITMSG"
+SESSION_PATHNAME = ".session"
 
 CONTEXT_SECTION_HEADER = "lm Context"
+SCISSORS_LINE = "<!-- ------------------------ >8 ------------------------ -->"
 
 SYSTEM_PROMPT = f"""
 You are a helpful assistant. Answer the question concisely. \
@@ -32,70 +35,112 @@ def main() -> None:
         help="prompt name (maps to ~/.config/lm/presets/<name>.md)",
         type=str,
     )
+    # TODO: Should we differentiate thread creation vs continuation?
+    parser.add_argument(
+        "--thread",
+        help="thread name (maps to ~/.config/lm/threads/<name>)",
+        type=str,
+    )
     args = parser.parse_args()
     preset: str | None = args.preset
 
-    thread_path = THREADS_PATH / datetime.datetime.now().astimezone().strftime(
-        "%Y%m%d-%H%M%S"
-    )
-    thread_path.mkdir()
+    if args.thread is not None:
+        thread_name: str = args.thread
+    else:
+        thread_name = datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
 
-    query_path = thread_path / QUERY_PATHNAME
-    query_path.touch()
+    thread_path = THREADS_PATH / thread_name
+    thread_path.mkdir(exist_ok=True)
+
+    query_editmsg_path = thread_path / QUERY_EDITMSG_PATHNAME
 
     if preset is not None:
         preset_path = PROMPTS_PATH / f"{preset}.md"
         if not preset_path.exists():
             sys.exit(f"Preset not found: {preset_path}")
         initial_prompt = preset_path.read_text()
-        query_path.write_text(initial_prompt)
+        query_editmsg_path.write_text(initial_prompt)
 
     if not sys.stdin.isatty():
         context = sys.stdin.read()
-        with query_path.open("a") as f:
+        with query_editmsg_path.open("a") as f:
             f.write(f"\n\n# {CONTEXT_SECTION_HEADER}\n\n{context}")
+
+    next_idx = _get_next_idx(thread_path)
+    if next_idx > 0:
+        with query_editmsg_path.open("a") as f:
+            f.write(f"\n\n{SCISSORS_LINE}\n\n")
+            for idx in range(next_idx - 1, -1, -1):
+                past_answer_path = thread_path / _get_answer_pathname(idx)
+                past_query_path = thread_path / _get_query_pathname(idx)
+                f.write(f"# lm\n\n{past_answer_path.read_text()}")
+                f.write(f"\n\n# user\n\n{past_query_path.read_text()}")
 
     editor = os.environ.get("EDITOR", "vim")
     with Path("/dev/tty").open() as tty:
         subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
-            [editor, str(query_path)],
+            [editor, str(query_editmsg_path)],
             stdin=tty,
             stdout=sys.stdout,
             stderr=sys.stderr,
             check=True,
         )
-    prompt = query_path.read_text()
+    query = query_editmsg_path.read_text().split(f"\n{SCISSORS_LINE}\n")[0].strip()
+    query_editmsg_path.unlink()
 
-    if prompt.strip() == "":
+    if query.strip() == "":
         sys.exit("Prompt is empty, exiting.")
 
-    _run_inference(prompt, thread_path)
+    query_path = thread_path / _get_query_pathname(next_idx)
+    query_path.write_text(query)
+
+    session_path = thread_path / SESSION_PATHNAME
+    if session_path.exists():
+        session_id: str | None = session_path.read_text()
+    else:
+        session_id = None
+
+    inference_session_id, answer = _run_inference(query, session_id)
+
+    if session_id is None:
+        session_path.write_text(inference_session_id)
+    elif inference_session_id != session_id:
+        sys.exit(
+            f"Session ID mismatch between inference result and session file: "
+            f"{inference_session_id} != {session_id}"
+        )
+
+    answer_path = thread_path / _get_answer_pathname(next_idx)
+    answer_path.write_text(answer)
 
 
-def _run_inference(prompt: str, thread_path: Path) -> None:
-    answer_path = thread_path / ANSWER_PATHNAME
+def _run_inference(query: str, session_id: str | None) -> tuple[str, str]:
+    command = [
+        "claude",
+        # Make it stateless
+        "--system-prompt",
+        SYSTEM_PROMPT,
+        "--print",
+        # TODO: Understand which tool to activate & when
+        "--tools",
+        "",
+        # To stream answer text
+        "--include-partial-messages",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        query,
+    ]
 
-    process = subprocess.Popen(  # noqa: S603  (prompt from user expected to be safe)
-        [  # noqa: S607  (claude from PATH expected to be safe)
-            "claude",
-            prompt,
-            # Make it stateless
-            "--system-prompt",
-            SYSTEM_PROMPT,
-            "--print",
-            "--no-session-persistence",
-            "--tools",
-            "",
-            # To stream answer text
-            "--include-partial-messages",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-        ],
+    if session_id is not None:
+        command.extend(["--resume", session_id])
+
+    process = subprocess.Popen(  # noqa: S603  (command is not user-provided)
+        command,
         # --bare / CLAUDE_CODE_SIMPLE disables OAuth and routes billing to API
         # Still, as long as we set CWD to a bare directory, no CLAUDE.md will be
         # picked up
-        cwd=thread_path,
+        cwd=EMPTY_CWD_PATH,
         stdout=subprocess.PIPE,
         text=True,
     )
@@ -103,27 +148,46 @@ def _run_inference(prompt: str, thread_path: Path) -> None:
     if process.stdout is None:
         sys.exit("Unexpected error: Claude stdout not captured")
 
-    with answer_path.open("w") as answer_file:
-        for line in process.stdout:
-            event = json.loads(line)
-            if event["type"] != "stream_event":
-                continue
-            if event["event"]["type"] != "content_block_delta":
-                continue
-            if event["event"]["delta"]["type"] != "text_delta":
-                continue
-            text = event["event"]["delta"]["text"]
+    first_line = process.stdout.readline()
+    first_event = json.loads(first_line)
+    process_session_id = first_event["session_id"]
 
-            answer_file.write(text)
-            sys.stdout.write(text)
-            sys.stdout.flush()
+    answer_buf = io.StringIO()
+    for line in process.stdout:
+        event = json.loads(line)
 
-        answer_file.write("\n")
-        sys.stdout.write("\n")
+        if event["type"] != "stream_event":
+            continue
+        if event["event"]["type"] != "content_block_delta":
+            continue
+        if event["event"]["delta"]["type"] != "text_delta":
+            continue
+        text = event["event"]["delta"]["text"]
+
+        answer_buf.write(text)
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    answer_buf.write("\n")
+    sys.stdout.write("\n")
 
     process.wait()
     if process.returncode != 0:
         sys.exit(process.returncode)
+
+    return process_session_id, answer_buf.getvalue()
+
+
+def _get_next_idx(thread_path: Path) -> int:
+    return len(list(thread_path.glob("??A.md")))
+
+
+def _get_query_pathname(idx: int) -> str:
+    return f"{idx:02d}A.md"
+
+
+def _get_answer_pathname(idx: int) -> str:
+    return f"{idx:02d}B.md"
 
 
 if __name__ == "__main__":
