@@ -26,6 +26,12 @@ You are a helpful assistant. Answer the question concisely. \
 Contextual information is provided after in the `{CONTEXT_SECTION_HEADER}` section.
 """
 
+# TODO: Provide something to initialize config directory once
+# TODO: Implement forking with symlinks to share common history between threads
+# Seems like we will need to fork at each turn to edit previous messages
+# TODO: Allow to specify Claude model
+# TODO: Inspect claude command flags for further improvements
+
 
 def main() -> None:
     """Entry point for the lm CLI."""
