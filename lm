@@ -37,6 +37,7 @@ CHAR_DELAY = 1 / 1000
 # Seems like we will need to fork at each turn to edit previous messages
 # TODO: Allow to specify Claude model
 # TODO: Inspect claude command flags for further improvements
+# TODO: Address annoying UX of text moving upwards as the answer is being streamed
 
 
 def main() -> None:
