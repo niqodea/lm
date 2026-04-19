@@ -1,17 +1,13 @@
 # lm
 
-A minimal CLI wrapper that pipes your terminal into Claude's intelligence — stateless, tool-free, and billed to your **Claude Pro subscription** rather than the API.
+A minimal Claude CLI running on your Pro/Max subscription, where you control the context.
 
 ## What it is
 
-`lm` is a thin shell around the `claude` CLI that strips away everything except the core text-in / text-out loop:
+`lm` opens your editor, you write a prompt, Claude responds. That's the whole loop.
 
-- **Stateless**: no memory, no sessions, no conversation history leaking between runs
-- **Tool-free**: no file system access, no code execution, no side-effects
-- **Subscription-billed**: uses your Claude Pro account, not API credits
-- **Model-agnostic by design**: the interface is plain text; swap the backend without changing your workflow
-
-The goal is to give you a sharp, distraction-free interface to the model's raw reasoning ability.
+Pipe in context from your terminal, use presets for recurring tasks, and pick up threads by name.
+Everything is plain markdown files in `~/.config/lm/`: readable, editable, and yours.
 
 ## Installation
 
@@ -24,23 +20,45 @@ Requires the [Claude CLI](https://github.com/anthropics/claude-code) to be insta
 ## Usage
 
 Open an editor to write your prompt:
+
 ```sh
 lm
 ```
 
-Pipe context in (appended under a `# lm Context` section):
+Pipe in context. It lands under a `# lm Context` section in the editor:
+
 ```sh
 cat somefile.py | lm
 git diff | lm
 ```
 
-Use a saved prompt preset:
+Use a preset to pre-populate the editor with reusable instructions:
+
 ```sh
-lm --preset review        # loads ~/.config/lm/prompts/review.md
+lm --preset review
 cat foo.py | lm --preset review
 ```
 
+Continue a named thread:
+
+```sh
+lm --thread mytopic
+cat error.log | lm --thread mytopic
+```
+
+When resuming a thread, past exchanges appear in the editor below a scissors line.
+Everything above the line is your new query.
+The history is there for context, not for sending.
+
 ## Presets
 
-Store reusable system-level instructions in `~/.config/lm/prompts/<name>.md`.
-They are prepended to the prompt before you open the editor, so you can refine or extend them per-run.
+Store reusable instructions in `~/.config/lm/prompts/<name>.md`.
+They are prepended to the editor buffer on each run, so you can refine or extend them before sending.
+
+## Threads
+
+Each run creates a thread under `~/.config/lm/threads/`.
+Without `--thread`, it's named after the current timestamp.
+Pass `--thread <name>` to resume or start a named thread.
+
+Thread history is plain files: numbered query/answer pairs (`00A.md`, `00B.md`, `01A.md`, …) you can read, edit, or delete like anything else.
