@@ -16,7 +16,7 @@ PROMPTS_PATH = CONFIG_PATH / "prompts"
 THREADS_PATH = CONFIG_PATH / "threads"
 EMPTY_CWD_PATH = CONFIG_PATH / ".empty-cwd"
 
-QUERY_EDITMSG_PATHNAME = ".QUERY_EDITMSG"
+QUERY_EDITMSG_PATHNAME = ".QUERY_EDITMSG.md"
 SESSION_PATHNAME = ".session"
 
 CONTEXT_SECTION_HEADER = "lm Context"
@@ -26,6 +26,8 @@ SYSTEM_PROMPT = f"""
 You are a helpful assistant. Answer the question concisely. \
 Contextual information is provided after in the `{CONTEXT_SECTION_HEADER}` section.
 """
+
+QUERY_SUMMARY_MAX_LENGTH = 100
 
 # TODO: should we avoid hardcoding this? works fine for current latencies, but might be
 # annoying if streaming becomes faster in the future. Perhaps configurable, perhaps
@@ -82,12 +84,14 @@ def main() -> None:
     next_idx = _get_next_idx(thread_path)
     if next_idx > 0:
         with query_editmsg_path.open("a") as f:
-            f.write(f"\n\n{SCISSORS_LINE}\n\n")
+            f.write(f"\n\n{SCISSORS_LINE}")
             for idx in range(next_idx - 1, -1, -1):
                 past_answer_path = thread_path / _get_answer_pathname(idx)
                 past_query_path = thread_path / _get_query_pathname(idx)
-                f.write(f"# lm\n\n{past_answer_path.read_text()}")
-                f.write(f"\n\n# user\n\n{past_query_path.read_text()}")
+                f.write(
+                    f"\n\n<!-- lm Answer {idx} -->\n\n{past_answer_path.read_text()}"
+                )
+                f.write(f"\n\n<!-- lm Query {idx} -->\n\n{past_query_path.read_text()}")
 
     editor = os.environ.get("EDITOR", "vim")
     with Path("/dev/tty").open() as tty:
@@ -102,7 +106,7 @@ def main() -> None:
     query_editmsg_path.unlink()
 
     if query.strip() == "":
-        sys.exit("Prompt is empty, exiting.")
+        sys.exit("Query is empty, exiting.")
 
     query_path = thread_path / _get_query_pathname(next_idx)
     query_path.write_text(query)
@@ -112,6 +116,16 @@ def main() -> None:
         session_id: str | None = session_path.read_text()
     else:
         session_id = None
+
+    query_summary = " ".join(query.split())  # collapse all separators to spaces
+    if len(query_summary) > QUERY_SUMMARY_MAX_LENGTH:
+        query_summary_start = query_summary[: QUERY_SUMMARY_MAX_LENGTH // 2]
+        query_summary_end = query_summary[-QUERY_SUMMARY_MAX_LENGTH // 2 - 1 :]
+        query_summary = f"{query_summary_start}...{query_summary_end}"
+
+    sys.stdout.write(f"Query: {query_summary}\n")
+    sys.stdout.write("Waiting for lm answer...")
+    sys.stdout.flush()
 
     inference_session_id, answer = _run_inference(session_id, query)
 
@@ -165,6 +179,8 @@ def _run_inference(session_id: str | None, query: str) -> tuple[str, str]:
     first_event = json.loads(first_line)
     process_session_id = first_event["session_id"]
 
+    # clear screen, helps keeping text stationary as it streams
+    sys.stdout.write("\033[2J\033[H")
     answer_buf = io.StringIO()
     for line in process.stdout:
         event = json.loads(line)
