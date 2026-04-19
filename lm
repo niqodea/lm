@@ -106,7 +106,7 @@ def main() -> None:
     else:
         session_id = None
 
-    inference_session_id, answer = _run_inference(query, session_id)
+    inference_session_id, answer = _run_inference(session_id, query)
 
     if session_id is None:
         session_path.write_text(inference_session_id)
@@ -120,7 +120,7 @@ def main() -> None:
     answer_path.write_text(answer)
 
 
-def _run_inference(query: str, session_id: str | None) -> tuple[str, str]:
+def _run_inference(session_id: str | None, query: str) -> tuple[str, str]:
     command = [
         "claude",
         # Make it stateless
