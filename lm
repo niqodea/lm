@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 CONFIG_PATH = Path.home() / ".config" / "lm"
@@ -25,6 +26,11 @@ SYSTEM_PROMPT = f"""
 You are a helpful assistant. Answer the question concisely. \
 Contextual information is provided after in the `{CONTEXT_SECTION_HEADER}` section.
 """
+
+# TODO: should we avoid hardcoding this? works fine for current latencies, but might be
+# annoying if streaming becomes faster in the future. Perhaps configurable, perhaps
+# automatically adapt?
+CHAR_DELAY = 1 / 1000
 
 # TODO: Provide something to initialize config directory once
 # TODO: Implement forking with symlinks to share common history between threads
@@ -171,8 +177,10 @@ def _run_inference(session_id: str | None, query: str) -> tuple[str, str]:
         text = event["event"]["delta"]["text"]
 
         answer_buf.write(text)
-        sys.stdout.write(text)
-        sys.stdout.flush()
+        for char in text:
+            sys.stdout.write(char)
+            sys.stdout.flush()
+            time.sleep(CHAR_DELAY)
 
     answer_buf.write("\n")
     sys.stdout.write("\n")
