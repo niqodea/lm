@@ -19,4 +19,4 @@ ignore = [
   # Too opinionated on complexity
   "C901",
   "PLR0915",
-]  
+]
