@@ -47,24 +47,40 @@ CHAR_DELAY = 1 / 1000
 def main() -> None:
     """Entry point for the lm CLI."""
     parser = argparse.ArgumentParser(prog="lm")
-    parser.add_argument(
-        "--preset",
-        help="prompt name (maps to ~/.config/lm/presets/<name>.md)",
-        type=str,
-    )
     # TODO: Should we differentiate thread creation vs continuation?
     parser.add_argument(
         "--thread",
         help="thread name (maps to ~/.config/lm/threads/<name>)",
         type=str,
     )
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run_parser = subparsers.add_parser(
+        "run", help="write a query and get a response immediately"
+    )
+    run_parser.add_argument(
+        "--preset",
+        help="prompt name (maps to ~/.config/lm/presets/<name>.md)",
+        type=str,
+    )
+
     args = parser.parse_args()
-    preset: str | None = args.preset
 
     if args.thread is not None:
         thread_name: str = args.thread
     else:
         thread_name = datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+
+    match args.command:
+        case "run":
+            preset: str | None = args.preset
+            _cmd_run(thread_name, preset)
+        case _:
+            sys.exit(f"Unknown command: {args.command}")
+
+
+def _cmd_run(thread_name: str, preset: str | None) -> None:
 
     thread_path = THREADS_PATH / thread_name
     thread_path.mkdir(exist_ok=True)
