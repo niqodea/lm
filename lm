@@ -16,8 +16,10 @@ PROMPTS_PATH = CONFIG_PATH / "prompts"
 THREADS_PATH = CONFIG_PATH / "threads"
 EMPTY_CWD_PATH = CONFIG_PATH / ".empty-cwd"
 
-QUERY_EDITMSG_PATHNAME = ".QUERY_EDITMSG.md"
 SESSION_PATHNAME = ".session"
+
+STAGED_PATHNAME = "staged"
+STAGED_QUERY_PATHNAME = "query.md"
 
 CONTEXT_SECTION_HEADER = "lm Context"
 SCISSORS_LINE = "<!-- ------------------------ >8 ------------------------ -->"
@@ -42,92 +44,150 @@ CHAR_DELAY = 1 / 1000
 # TODO: Address annoying UX of text moving upwards as the answer is being streamed
 # TODO: Implement top-to-bottom message strategy, but only with recognized editors that
 # can place the cursor at the bottom
+# TODO: Differentate prompt (text part) vs query (the whole)
 
 
 def main() -> None:
     """Entry point for the lm CLI."""
     parser = argparse.ArgumentParser(prog="lm")
     # TODO: Should we differentiate thread creation vs continuation?
-    parser.add_argument(
-        "--thread",
-        help="thread name (maps to ~/.config/lm/threads/<name>)",
-        type=str,
-    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_parser = subparsers.add_parser(
-        "run", help="write a query and get a response immediately"
+        "run",
+        help="Stage a query and run inference in one command.",
+    )
+    run_parser.set_defaults(func=_cmd_run)
+    run_parser.add_argument(
+        "--thread",
+        help="Thread name (maps to ~/.config/lm/threads/<name>)",
+        type=str,
     )
     run_parser.add_argument(
+        "--preset",
+        help="Prompt name (maps to ~/.config/lm/presets/<name>.md)",
+        type=str,
+    )
+
+    stage_parser = subparsers.add_parser(
+        "stage",
+        help="Stage a query without running inference.",
+    )
+    stage_parser.set_defaults(func=_cmd_stage)
+    stage_parser.add_argument(
+        "--thread",
+        help="thread name (maps to ~/.config/lm/threads/<name>)",
+        type=str,
+        required=True,
+    )
+    stage_parser.add_argument(
         "--preset",
         help="prompt name (maps to ~/.config/lm/presets/<name>.md)",
         type=str,
     )
 
-    args = parser.parse_args()
+    commit_parser = subparsers.add_parser(
+        "commit",
+        help="Run inference on the staging area.",
+    )
+    commit_parser.set_defaults(func=_cmd_commit)
+    commit_parser.add_argument(
+        "--thread",
+        help="Thread name (maps to ~/.config/lm/threads/<name>)",
+        type=str,
+        required=True,
+    )
 
+    clear_parser = subparsers.add_parser(
+        "clear",
+        help="Clear the staging area without running inference.",
+    )
+    clear_parser.set_defaults(func=_cmd_clear)
+    clear_parser.add_argument(
+        "--thread",
+        help="Thread name (maps to ~/.config/lm/threads/<name>)",
+        type=str,
+        required=True,
+    )
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+def _cmd_run(args: argparse.Namespace) -> None:
     if args.thread is not None:
         thread_name: str = args.thread
     else:
         thread_name = datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-
-    match args.command:
-        case "run":
-            preset: str | None = args.preset
-            _cmd_run(thread_name, preset)
-        case _:
-            sys.exit(f"Unknown command: {args.command}")
+    preset: str | None = args.preset
+    _stage_query(thread_name, preset)
+    _commit_query(thread_name)
 
 
-def _cmd_run(thread_name: str, preset: str | None) -> None:
+def _cmd_stage(args: argparse.Namespace) -> None:
+    thread_name: str = args.thread
+    preset: str | None = args.preset
+    _stage_query(thread_name, preset)
+
+
+def _cmd_commit(args: argparse.Namespace) -> None:
+    thread_name: str = args.thread
+    _commit_query(thread_name)
+
+
+def _cmd_clear(args: argparse.Namespace) -> None:
+    thread_name: str = args.thread
+    _clear_staged(thread_name)
+
+
+# ---
+
+
+def _stage_query(thread_name: str, preset: str | None) -> None:
 
     thread_path = THREADS_PATH / thread_name
     thread_path.mkdir(exist_ok=True)
 
-    query_editmsg_buf = io.StringIO()
+    staged_path = thread_path / STAGED_PATHNAME
+    staged_path.mkdir(exist_ok=True)
 
-    if preset is not None:
-        preset_path = PROMPTS_PATH / f"{preset}.md"
-        if not preset_path.exists():
-            sys.exit(f"Preset not found: {preset_path}")
-        initial_prompt = preset_path.read_text()
-        query_editmsg_buf.write(initial_prompt)
+    query_path = staged_path / STAGED_QUERY_PATHNAME
+    if not query_path.exists():
+        query_editor_content = _build_query_editor_content(thread_path, preset)
+        query_path.write_text(query_editor_content)
+    elif preset is not None:
+        sys.exit(
+            f"Staging area already exists for thread {thread_name}, "
+            "cannot apply preset. Please commit or clear the staging area first."
+        )
 
-    if not sys.stdin.isatty():
-        context = sys.stdin.read()
-        query_editmsg_buf.write(f"\n\n# {CONTEXT_SECTION_HEADER}\n\n{context}")
-
-    next_idx = _get_next_idx(thread_path)
-    if next_idx > 0:
-        query_editmsg_buf.write(f"\n\n{SCISSORS_LINE}")
-        for idx in range(next_idx - 1, -1, -1):
-            past_answer_path = thread_path / _get_answer_pathname(idx)
-            past_query_path = thread_path / _get_query_pathname(idx)
-            query_editmsg_buf.write(
-                f"\n\n<!-- lm Answer {idx} -->\n\n{past_answer_path.read_text()}"
-            )
-            query_editmsg_buf.write(
-                f"\n\n<!-- lm Query {idx} -->\n\n{past_query_path.read_text()}"
-            )
-
-    query_editmsg_path = thread_path / QUERY_EDITMSG_PATHNAME
-    query_editmsg_path.write_text(query_editmsg_buf.getvalue())
     editor = os.environ.get("EDITOR", "vim")
     with Path("/dev/tty").open() as tty:
         subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
-            [editor, str(query_editmsg_path)],
+            [editor, str(query_path)],
             stdin=tty,
             stdout=sys.stdout,
             stderr=sys.stderr,
             check=True,
         )
-    query = query_editmsg_path.read_text().split(f"\n{SCISSORS_LINE}\n")[0].strip()
-    query_editmsg_path.unlink()
+
+
+def _commit_query(thread_name: str) -> None:
+    thread_path = THREADS_PATH / thread_name
+    if not thread_path.exists():
+        sys.exit(f"Thread not found: {thread_name}")
+
+    staged_query_path = thread_path / STAGED_PATHNAME / STAGED_QUERY_PATHNAME
+    if not staged_query_path.exists():
+        sys.exit(f"No staged query found for thread {thread_name}, cannot commit.")
+
+    query = staged_query_path.read_text().split(f"\n{SCISSORS_LINE}\n")[0].strip()
 
     if len(query) == 0:
         sys.exit("Query is empty, exiting.")
 
+    next_idx = _get_next_idx(thread_path)
     query_path = thread_path / _get_query_pathname(next_idx)
     query_path.write_text(query)
 
@@ -160,6 +220,8 @@ def _cmd_run(thread_name: str, preset: str | None) -> None:
 
     answer_path = thread_path / _get_answer_pathname(next_idx)
     answer_path.write_text(answer)
+
+    _clear_staged(thread_name)
 
 
 def _run_inference(session_id: str | None, query: str) -> tuple[str, str]:
@@ -230,6 +292,17 @@ def _run_inference(session_id: str | None, query: str) -> tuple[str, str]:
     return process_session_id, answer_buf.getvalue()
 
 
+def _clear_staged(thread_name: str) -> None:
+    thread_path = THREADS_PATH / thread_name
+    if not thread_path.exists():
+        sys.exit(f"Thread not found: {thread_name}")
+    staged_path = thread_path / STAGED_PATHNAME
+    if staged_path.exists():
+        for item in staged_path.iterdir():
+            item.unlink()
+        staged_path.rmdir()
+
+
 def _get_next_idx(thread_path: Path) -> int:
     return len(list(thread_path.glob("??A.md")))
 
@@ -240,6 +313,36 @@ def _get_query_pathname(idx: int) -> str:
 
 def _get_answer_pathname(idx: int) -> str:
     return f"{idx:02d}B.md"
+
+
+def _build_query_editor_content(thread_path: Path, preset: str | None) -> str:
+    query_buf = io.StringIO()
+
+    if preset is not None:
+        preset_path = PROMPTS_PATH / f"{preset}.md"
+        if not preset_path.exists():
+            sys.exit(f"Preset not found: {preset_path}")
+        initial_prompt = preset_path.read_text()
+        query_buf.write(initial_prompt)
+
+    if not sys.stdin.isatty():
+        context = sys.stdin.read()
+        query_buf.write(f"\n\n# {CONTEXT_SECTION_HEADER}\n\n{context}")
+
+    next_idx = _get_next_idx(thread_path)
+    if next_idx > 0:
+        query_buf.write(f"\n\n{SCISSORS_LINE}")
+        for idx in range(next_idx - 1, -1, -1):
+            past_answer_path = thread_path / _get_answer_pathname(idx)
+            past_query_path = thread_path / _get_query_pathname(idx)
+            query_buf.write(
+                f"\n\n<!-- lm Answer {idx} -->\n\n{past_answer_path.read_text()}"
+            )
+            query_buf.write(
+                f"\n\n<!-- lm Query {idx} -->\n\n{past_query_path.read_text()}"
+            )
+
+    return query_buf.getvalue()
 
 
 if __name__ == "__main__":
