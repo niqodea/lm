@@ -9,27 +9,35 @@ import os
 import subprocess
 import sys
 import time
+from itertools import count
 from pathlib import Path
+from typing import IO
 
 CONFIG_PATH = Path.home() / ".config" / "lm"
-PROMPTS_PATH = CONFIG_PATH / "prompts"
-THREADS_PATH = CONFIG_PATH / "threads"
+PRESETS_PATH = CONFIG_PATH / "presets"
 EMPTY_CWD_PATH = CONFIG_PATH / ".empty-cwd"
 
+THREADS_PATH = CONFIG_PATH / "threads"
+
+TURN_IDX_ZEROPAD = 2
 SESSION_PATHNAME = ".session"
+EDITMSG_PATHNAME = ".EDITMSG.md"
+STAGED_PATHNAME = "STAGED"
 
-STAGED_PATHNAME = "staged"
-STAGED_QUERY_PATHNAME = "query.md"
+PROMPT_PATHNAME = "prompt.md"
+RESPONSE_PATHNAME = "response.md"
+ATTACHMENTS_PATHNAME = "attachments"
+STDIN_PATHNAME = "stdin"
 
-CONTEXT_SECTION_HEADER = "lm Context"
+
 SCISSORS_LINE = "<!-- ------------------------ >8 ------------------------ -->"
 
-SYSTEM_PROMPT = f"""
-You are a helpful assistant. Answer the question concisely. \
-Contextual information is provided after in the `{CONTEXT_SECTION_HEADER}` section.
+# TODO: Understand whether you can change this within a session
+SYSTEM_PROMPT = """\
+You are a helpful assistant. Answer the question concisely.
 """
 
-QUERY_SUMMARY_MAX_LENGTH = 100
+PROMPT_SUMMARY_MAX_LENGTH = 100
 
 # TODO: should we avoid hardcoding this? works fine for current latencies, but might be
 # annoying if streaming becomes faster in the future. Perhaps configurable, perhaps
@@ -46,6 +54,10 @@ CHAR_DELAY = 1 / 1000
 # can place the cursor at the bottom
 # TODO: Differentate prompt (text part) vs query (the whole)
 
+LS_NAME_LENGTH = 15
+LS_PROMPT_LENGTH = 30
+LS_RESPONSE_LENGTH = 50
+
 
 def main() -> None:
     """Entry point for the lm CLI."""
@@ -60,13 +72,14 @@ def main() -> None:
     )
     run_parser.set_defaults(func=_cmd_run)
     run_parser.add_argument(
+        "-t",
         "--thread",
         help="Thread name (maps to ~/.config/lm/threads/<name>)",
         type=str,
     )
     run_parser.add_argument(
         "--preset",
-        help="Prompt name (maps to ~/.config/lm/presets/<name>.md)",
+        help="Preset name (maps to ~/.config/lm/presets/<name>.md)",
         type=str,
     )
 
@@ -111,6 +124,9 @@ def main() -> None:
         required=True,
     )
 
+    ls_parser = subparsers.add_parser("ls", help="List threads.")
+    ls_parser.set_defaults(func=_cmd_ls)
+
     args = parser.parse_args()
     args.func(args)
 
@@ -120,31 +136,47 @@ def _cmd_run(args: argparse.Namespace) -> None:
         thread_name: str = args.thread
     else:
         thread_name = datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    preset: str | None = args.preset
-    _stage_query(thread_name, preset)
-    _commit_query(thread_name)
+        sys.stdout.write(f"No thread name provided, using timestamp: {thread_name}\n")
+    preset_name: str | None = args.preset
+
+    thread_path = THREADS_PATH / thread_name
+    thread_path.mkdir(exist_ok=True)
+
+    if (thread_path / STAGED_PATHNAME).exists():
+        sys.exit(
+            "Staging area already exists, cannot run. "
+            "Please commit or clear the staging area first."
+        )
+
+    draft = _get_preset(preset_name) if preset_name is not None else ""
+
+    prompt = _edit_prompt(thread_path, draft)
+    if not prompt:
+        sys.exit("Prompt is empty, exiting.")
+
+    # TODO: Maybe instantiate this only after the response is received?
+    turn_idx = _get_turns_count(thread_path)
+    turn_path = thread_path / f"{turn_idx:0{TURN_IDX_ZEROPAD}d}"
+    turn_path.mkdir()
+
+    prompt_path = turn_path / PROMPT_PATHNAME
+    prompt_path.write_text(prompt)
+
+    if sys.stdin.isatty():
+        piped_stdin = ""
+    else:
+        piped_stdin = sys.stdin.read()
+        stdin_path = turn_path / STDIN_PATHNAME
+        stdin_path.write_text(piped_stdin)
+
+    session_path = thread_path / SESSION_PATHNAME
+    response_path = turn_path / RESPONSE_PATHNAME
+    _execute_turn(session_path, response_path, prompt, piped_stdin=piped_stdin)
 
 
 def _cmd_stage(args: argparse.Namespace) -> None:
     thread_name: str = args.thread
-    preset: str | None = args.preset
-    _stage_query(thread_name, preset)
-
-
-def _cmd_commit(args: argparse.Namespace) -> None:
-    thread_name: str = args.thread
-    _commit_query(thread_name)
-
-
-def _cmd_clear(args: argparse.Namespace) -> None:
-    thread_name: str = args.thread
-    _clear_staged(thread_name)
-
-
-# ---
-
-
-def _stage_query(thread_name: str, preset: str | None) -> None:
+    preset_name: str | None = args.preset
 
     thread_path = THREADS_PATH / thread_name
     thread_path.mkdir(exist_ok=True)
@@ -152,63 +184,182 @@ def _stage_query(thread_name: str, preset: str | None) -> None:
     staged_path = thread_path / STAGED_PATHNAME
     staged_path.mkdir(exist_ok=True)
 
-    query_path = staged_path / STAGED_QUERY_PATHNAME
-    if not query_path.exists():
-        query_editor_content = _build_query_editor_content(thread_path, preset)
-        query_path.write_text(query_editor_content)
-    elif preset is not None:
-        sys.exit(
-            f"Staging area already exists for thread {thread_name}, "
-            "cannot apply preset. Please commit or clear the staging area first."
+    staged_prompt_path = staged_path / PROMPT_PATHNAME
+
+    match staged_prompt_path.exists(), preset_name:
+        case False, None:
+            draft = ""
+        case False, str():
+            draft = _get_preset(preset_name)
+        case True, None:
+            draft = staged_prompt_path.read_text()
+        case True, str():
+            sys.exit("Staged prompt already exists, cannot apply preset.")
+
+    prompt = _edit_prompt(thread_path, draft)
+
+    staged_prompt_path.write_text(prompt)
+
+
+def _cmd_commit(args: argparse.Namespace) -> None:
+    thread_name: str = args.thread
+
+    thread_path = THREADS_PATH / thread_name
+    if not thread_path.exists():
+        sys.exit("Thread does not exist.")
+
+    staged_path = thread_path / STAGED_PATHNAME
+    if not thread_path.exists():
+        sys.exit("No staging area found.")
+
+    staged_prompt_path = staged_path / PROMPT_PATHNAME
+    if not staged_prompt_path.exists():
+        sys.exit("No staged prompt found.")
+
+    prompt = staged_prompt_path.read_text()
+    if not prompt:
+        sys.exit("Prompt is empty, exiting.")
+
+    turn_idx = _get_turns_count(thread_path)
+    turn_path = thread_path / f"{turn_idx:0{TURN_IDX_ZEROPAD}d}"
+    staged_path.rename(turn_path)
+
+    session_path = thread_path / SESSION_PATHNAME
+    response_path = turn_path / RESPONSE_PATHNAME
+    _execute_turn(session_path, response_path, prompt, piped_stdin="")
+
+
+def _cmd_clear(args: argparse.Namespace) -> None:
+    thread_name: str = args.thread
+    thread_path = THREADS_PATH / thread_name
+
+    if not thread_path.exists():
+        sys.exit("Thread does not exist.")
+
+    staged_path = thread_path / STAGED_PATHNAME
+
+    if not staged_path.exists():
+        sys.exit("No staging area found.")
+
+    staged_prompt_path = staged_path / PROMPT_PATHNAME
+    staged_prompt_path.unlink(missing_ok=True)
+
+    staged_path.rmdir()
+
+
+def _cmd_ls(_: argparse.Namespace) -> None:
+    paths = sorted(
+        (p for p in THREADS_PATH.iterdir() if p.is_dir()),
+        # NOTE: Not a super robust way to sort by last activity, but simple and works
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    names = [p.name for p in paths]
+
+    if not sys.stdout.isatty():
+        _write_threads_summary(names, sys.stdout)
+        return
+
+    pager = os.getenv("PAGER", "less")
+    env = os.environ.copy()
+    env.setdefault("LESS", "-FRX")
+    with subprocess.Popen(  # noqa: S603  (running the user pager expected to be safe)
+        pager,
+        stdin=subprocess.PIPE,
+        text=True,
+    ) as pager_proc:
+        if pager_proc.stdin is None:
+            sys.exit("Unexpected error: Pager standard input not captured")
+        _write_threads_summary(names, pager_proc.stdin)
+
+
+def _write_threads_summary(names: list[str], out: IO[str]) -> None:
+    for name in names:
+        out.write(
+            f"{_compress_text(name, max_length=LS_NAME_LENGTH):<{LS_NAME_LENGTH}}"
         )
 
-    editor = os.environ.get("EDITOR", "vim")
+        out.write("   ")
+
+        path = THREADS_PATH / name
+        turns_count = _get_turns_count(path)
+        out.write(f"{turns_count:{TURN_IDX_ZEROPAD}d}t")
+
+        out.write("   ")
+
+        last_turn_idx = turns_count - 1
+        last_turn_path = path / f"{last_turn_idx:0{TURN_IDX_ZEROPAD}d}"
+
+        last_prompt_path = last_turn_path / PROMPT_PATHNAME
+        if not last_prompt_path.exists():
+            out.write(f"{'':<{LS_PROMPT_LENGTH}}")
+        else:
+            last_prompt = _compress_text(
+                _flatten_text(last_prompt_path.read_text()),
+                max_length=LS_PROMPT_LENGTH,
+            )
+            out.write(f"{last_prompt:<{LS_PROMPT_LENGTH}}")
+
+        out.write("   ")
+
+        last_response_path = last_turn_path / RESPONSE_PATHNAME
+        if not last_response_path.exists():
+            out.write(f"{'':<{LS_RESPONSE_LENGTH}}")
+        else:
+            last_response = _compress_text(
+                _flatten_text(last_response_path.read_text()),
+                max_length=LS_RESPONSE_LENGTH,
+            )
+            out.write(f"{last_response:<{LS_RESPONSE_LENGTH}}")
+
+        out.write("\n")
+
+
+# ---
+
+
+def _edit_prompt(thread_path: Path, draft: str) -> str:
+    editmsg_path = thread_path / EDITMSG_PATHNAME
+    history = _build_history(thread_path)
+
+    with editmsg_path.open("w") as f:
+        f.write(draft)
+        if history:
+            f.write(f"\n\n{SCISSORS_LINE}\n\n")
+            for idx, (prompt, response) in reversed(list(enumerate(history))):
+                f.write(f"<!-- Response {idx} -->\n\n{response}\n\n")
+                f.write(f"<!-- Prompt {idx} -->\n\n{prompt}\n\n")
+
+    editor = os.getenv("EDITOR", "vim")
     with Path("/dev/tty").open() as tty:
         subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
-            [editor, str(query_path)],
+            [editor, str(editmsg_path)],
             stdin=tty,
             stdout=sys.stdout,
             stderr=sys.stderr,
             check=True,
         )
 
+    prompt = editmsg_path.read_text().split(f"\n{SCISSORS_LINE}\n")[0].strip()
+    editmsg_path.unlink()
+    return prompt
 
-def _commit_query(thread_name: str) -> None:
-    thread_path = THREADS_PATH / thread_name
-    if not thread_path.exists():
-        sys.exit(f"Thread not found: {thread_name}")
 
-    staged_query_path = thread_path / STAGED_PATHNAME / STAGED_QUERY_PATHNAME
-    if not staged_query_path.exists():
-        sys.exit(f"No staged query found for thread {thread_name}, cannot commit.")
+def _execute_turn(
+    session_path: Path, response_path: Path, prompt: str, *, piped_stdin: str
+) -> None:
+    session_id: str | None = session_path.read_text() if session_path.exists() else None
 
-    query = staged_query_path.read_text().split(f"\n{SCISSORS_LINE}\n")[0].strip()
+    prompt_summary = _compress_text(
+        _flatten_text(prompt), max_length=PROMPT_SUMMARY_MAX_LENGTH
+    )
 
-    if len(query) == 0:
-        sys.exit("Query is empty, exiting.")
-
-    next_idx = _get_next_idx(thread_path)
-    query_path = thread_path / _get_query_pathname(next_idx)
-    query_path.write_text(query)
-
-    session_path = thread_path / SESSION_PATHNAME
-    if session_path.exists():
-        session_id: str | None = session_path.read_text()
-    else:
-        session_id = None
-
-    query_summary = query
-    query_summary = " ".join(query_summary.split())  # collapse all separators to spaces
-    if len(query_summary) > QUERY_SUMMARY_MAX_LENGTH:
-        query_summary_start = query_summary[: QUERY_SUMMARY_MAX_LENGTH // 2 - 1]
-        query_summary_end = query_summary[-QUERY_SUMMARY_MAX_LENGTH // 2 + 2 :]
-        query_summary = f"{query_summary_start}...{query_summary_end}"
-
-    sys.stdout.write(f"Query: {query_summary}\n")
-    sys.stdout.write("Waiting for lm answer...")
+    sys.stdout.write(f"Prompt: {prompt_summary}\nWaiting for lm response...")
     sys.stdout.flush()
 
-    inference_session_id, answer = _run_inference(session_id, query)
+    inference_session_id, response = _run_inference(
+        session_id, prompt, piped_stdin=piped_stdin
+    )
 
     if session_id is None:
         session_path.write_text(inference_session_id)
@@ -218,13 +369,12 @@ def _commit_query(thread_name: str) -> None:
             f"{inference_session_id} != {session_id}"
         )
 
-    answer_path = thread_path / _get_answer_pathname(next_idx)
-    answer_path.write_text(answer)
-
-    _clear_staged(thread_name)
+    response_path.write_text(response)
 
 
-def _run_inference(session_id: str | None, query: str) -> tuple[str, str]:
+def _run_inference(
+    session_id: str | None, prompt: str, *, piped_stdin: str
+) -> tuple[str, str]:
     command = [
         "claude",
         # Make it stateless
@@ -234,12 +384,12 @@ def _run_inference(session_id: str | None, query: str) -> tuple[str, str]:
         # TODO: Understand which tool to activate & when
         "--tools",
         "",
-        # To stream answer text
+        # To stream response text
         "--include-partial-messages",
         "--output-format",
         "stream-json",
         "--verbose",
-        query,
+        prompt,
     ]
 
     if session_id is not None:
@@ -247,16 +397,22 @@ def _run_inference(session_id: str | None, query: str) -> tuple[str, str]:
 
     process = subprocess.Popen(  # noqa: S603  (command is not user-provided)
         command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
         # --bare / CLAUDE_CODE_SIMPLE disables OAuth and routes billing to API
         # Still, as long as we set CWD to a bare directory, no CLAUDE.md will be
         # picked up
         cwd=EMPTY_CWD_PATH,
-        stdout=subprocess.PIPE,
-        text=True,
     )
 
-    if process.stdout is None:
-        sys.exit("Unexpected error: Claude stdout not captured")
+    if process.stdin is None or process.stdout is None:
+        sys.exit("Unexpected error: Claude standard streams not captured")
+
+    # TODO: Understand difference of stdin vs @ read directives
+    # If not that different, we could think of unifying stdin as just another attachment
+    process.stdin.write(piped_stdin)
+    process.stdin.close()
 
     first_line = process.stdout.readline()
     first_event = json.loads(first_line)
@@ -264,7 +420,7 @@ def _run_inference(session_id: str | None, query: str) -> tuple[str, str]:
 
     # clear screen, helps keeping text stationary as it streams
     sys.stdout.write("\033[2J\033[H")
-    answer_buf = io.StringIO()
+    buffer = io.StringIO()
     for line in process.stdout:
         event = json.loads(line)
 
@@ -276,73 +432,61 @@ def _run_inference(session_id: str | None, query: str) -> tuple[str, str]:
             continue
         text = event["event"]["delta"]["text"]
 
-        answer_buf.write(text)
+        buffer.write(text)
         for char in text:
             sys.stdout.write(char)
             sys.stdout.flush()
             time.sleep(CHAR_DELAY)
 
-    answer_buf.write("\n")
+    buffer.write("\n")
     sys.stdout.write("\n")
+
+    response = buffer.getvalue()
 
     process.wait()
     if process.returncode != 0:
         sys.exit(process.returncode)
 
-    return process_session_id, answer_buf.getvalue()
+    return process_session_id, response
 
 
-def _clear_staged(thread_name: str) -> None:
-    thread_path = THREADS_PATH / thread_name
-    if not thread_path.exists():
-        sys.exit(f"Thread not found: {thread_name}")
-    staged_path = thread_path / STAGED_PATHNAME
-    if staged_path.exists():
-        for item in staged_path.iterdir():
-            item.unlink()
-        staged_path.rmdir()
+def _get_turns_count(thread_path: Path) -> int:
+    for idx in count():
+        turn_path = thread_path / f"{idx:0{TURN_IDX_ZEROPAD}d}"
+        if not turn_path.exists():
+            return idx
+    raise AssertionError("Unreachable")
 
 
-def _get_next_idx(thread_path: Path) -> int:
-    return len(list(thread_path.glob("??A.md")))
+def _get_preset(name: str) -> str:
+    path = PRESETS_PATH / f"{name}.md"
+    if not path.exists():
+        sys.exit(f"Preset not found: {path}")
+    return path.read_text()
 
 
-def _get_query_pathname(idx: int) -> str:
-    return f"{idx:02d}A.md"
+def _compress_text(value: str, max_length: int) -> str:
+    if len(value) <= max_length:
+        return value
+    left = max_length // 2
+    right = max_length - left - 3
+    return f"{value[:left]}...{value[-right:]}"
 
 
-def _get_answer_pathname(idx: int) -> str:
-    return f"{idx:02d}B.md"
+def _flatten_text(value: str) -> str:
+    return " ".join(value.split())
 
 
-def _build_query_editor_content(thread_path: Path, preset: str | None) -> str:
-    query_buf = io.StringIO()
-
-    if preset is not None:
-        preset_path = PROMPTS_PATH / f"{preset}.md"
-        if not preset_path.exists():
-            sys.exit(f"Preset not found: {preset_path}")
-        initial_prompt = preset_path.read_text()
-        query_buf.write(initial_prompt)
-
-    if not sys.stdin.isatty():
-        context = sys.stdin.read()
-        query_buf.write(f"\n\n# {CONTEXT_SECTION_HEADER}\n\n{context}")
-
-    next_idx = _get_next_idx(thread_path)
-    if next_idx > 0:
-        query_buf.write(f"\n\n{SCISSORS_LINE}")
-        for idx in range(next_idx - 1, -1, -1):
-            past_answer_path = thread_path / _get_answer_pathname(idx)
-            past_query_path = thread_path / _get_query_pathname(idx)
-            query_buf.write(
-                f"\n\n<!-- lm Answer {idx} -->\n\n{past_answer_path.read_text()}"
-            )
-            query_buf.write(
-                f"\n\n<!-- lm Query {idx} -->\n\n{past_query_path.read_text()}"
-            )
-
-    return query_buf.getvalue()
+def _build_history(thread_path: Path) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    for idx in range(_get_turns_count(thread_path)):
+        turn_path = thread_path / f"{idx:0{TURN_IDX_ZEROPAD}d}"
+        prompt_path = turn_path / PROMPT_PATHNAME
+        response_path = turn_path / RESPONSE_PATHNAME
+        prompt = prompt_path.read_text()
+        response = response_path.read_text()
+        entries.append((prompt, response))
+    return entries
 
 
 if __name__ == "__main__":
