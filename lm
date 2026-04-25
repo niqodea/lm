@@ -64,6 +64,8 @@ LS_RESPONSE_LENGTH = 50
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
+PROMPT_IS_LAST_EDITORS = {"vi", "vim", "nvim"}
+
 
 def main() -> None:
     """Entry point for the lm CLI."""
@@ -185,7 +187,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
     turn_path.mkdir()
 
     prompt_path = turn_path / PROMPT_PATHNAME
-    prompt_path.write_text(prompt)
+    # new line at the end to be in line with response and stick to best practices
+    prompt_path.write_text(f"{prompt}\n")
 
     if sys.stdin.isatty():
         piped_stdin = ""
@@ -245,7 +248,8 @@ def _cmd_stage(args: argparse.Namespace) -> None:
 
     prompt = _edit_prompt(thread_path, draft)
 
-    staged_prompt_path.write_text(prompt)
+    # new line at the end to be in line with response and stick to best practices
+    staged_prompt_path.write_text(f"{prompt}\n")
 
 
 def _cmd_commit(args: argparse.Namespace) -> None:
@@ -263,7 +267,7 @@ def _cmd_commit(args: argparse.Namespace) -> None:
     if not staged_prompt_path.exists():
         sys.exit("No staged prompt found.")
 
-    prompt = staged_prompt_path.read_text()
+    prompt = staged_prompt_path.read_text().strip()
     if not prompt:
         sys.exit("Prompt is empty, exiting.")
 
@@ -375,28 +379,53 @@ def _write_threads_summary(names: list[str], out: IO[str]) -> None:
 def _edit_prompt(thread_path: Path, draft: str) -> str:
     editmsg_path = thread_path / EDITMSG_PATHNAME
     history = _build_history(thread_path)
-
-    with editmsg_path.open("w") as f:
-        f.write(draft)
-        if history:
-            f.write(f"\n\n{SCISSORS_LINE}\n\n")
-            for idx, (prompt, response) in reversed(list(enumerate(history))):
-                f.write(f"<!-- Response {idx} -->\n\n{response}\n\n")
-                f.write(f"<!-- Prompt {idx} -->\n\n{prompt}\n\n")
-
     editor = os.getenv("EDITOR", "vim")
-    with Path("/dev/tty").open() as tty:
-        subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
-            [editor, str(editmsg_path)],
+
+    prompt_is_last = editor in PROMPT_IS_LAST_EDITORS
+
+    if prompt_is_last:
+        command = [editor, "+", str(editmsg_path)]
+        scissors_line_component = (
+            "<!-- Everything above this scissors line will be ignored. -->\n"
+            f"{SCISSORS_LINE}\n"
+        )
+    else:
+        command = [editor, str(editmsg_path)]
+        scissors_line_component = (
+            f"{SCISSORS_LINE}\n"
+            "<!-- Everything below this scissors line will be ignored. -->\n"
+        )
+
+    components: list[str] = []
+    for turn_idx, (turn_prompt, turn_response) in enumerate(history):
+        components.append(f"<!-- Prompt {turn_idx} -->\n\n{turn_prompt}")
+        components.append(f"<!-- Answer {turn_idx} -->\n\n{turn_response}")
+
+    if components:
+        components.append(scissors_line_component)
+
+    components.append(draft)
+
+    if not prompt_is_last:
+        components.reverse()
+
+    editmsg_path.write_text("\n\n".join(components))
+
+    with Path("/dev/tty").open() as tty:  # in case stdin is being piped
+        subprocess.run(  # noqa: S603
+            command,
             stdin=tty,
             stdout=sys.stdout,
             stderr=sys.stderr,
             check=True,
         )
 
-    prompt = editmsg_path.read_text().split(f"\n{SCISSORS_LINE}\n")[0].strip()
+    editmsg_fragments = editmsg_path.read_text().split(f"\n{SCISSORS_LINE}\n")
     editmsg_path.unlink()
-    return prompt
+
+    prompt = editmsg_fragments[-1] if prompt_is_last else editmsg_fragments[0]
+
+    return prompt.strip()
 
 
 def _execute_turn(
@@ -431,7 +460,7 @@ def _execute_turn(
             f"{inference_session_id} != {session_id}"
         )
 
-    response_path.write_text(response)
+    response_path.write_text(response)  # seems like \n is always there at the end
 
 
 def _run_inference(
