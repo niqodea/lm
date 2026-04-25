@@ -20,6 +20,7 @@ EMPTY_CWD_PATH = CONFIG_PATH / ".empty-cwd"
 THREADS_PATH = CONFIG_PATH / "threads"
 
 TURN_IDX_ZEROPAD = 2
+MODEL_PATHNAME = ".model"
 SESSION_PATHNAME = ".session"
 EDITMSG_PATHNAME = ".EDITMSG.md"
 STAGED_PATHNAME = "STAGED"
@@ -47,7 +48,6 @@ CHAR_DELAY = 1 / 1000
 # TODO: Provide something to initialize config directory once
 # TODO: Implement forking with symlinks to share common history between threads
 # Seems like we will need to fork at each turn to edit previous messages
-# TODO: Allow to specify Claude model
 # TODO: Inspect claude command flags for further improvements
 # TODO: Address annoying UX of text moving upwards as the answer is being streamed
 # TODO: Implement top-to-bottom message strategy, but only with recognized editors that
@@ -57,6 +57,8 @@ CHAR_DELAY = 1 / 1000
 LS_NAME_LENGTH = 15
 LS_PROMPT_LENGTH = 30
 LS_RESPONSE_LENGTH = 50
+
+DEFAULT_MODEL = "claude-sonnet-4-6"
 
 
 def main() -> None:
@@ -89,6 +91,11 @@ def main() -> None:
     new_parser.add_argument(
         "name",
         help="Thread name (maps to ~/.config/lm/threads/<name>)",
+    )
+    new_parser.add_argument(
+        "--model",
+        help="Model to use for this thread.",
+        default=DEFAULT_MODEL,
     )
 
     stage_parser = subparsers.add_parser(
@@ -150,6 +157,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
         sys.stdout.write(f"Creating new thread: {thread_timestamp}\n")
         thread_path = THREADS_PATH / thread_timestamp
         thread_path.mkdir()
+        model_path = thread_path / MODEL_PATHNAME
+        model_path.write_text(DEFAULT_MODEL)
 
     if not thread_path.exists():
         sys.exit("Thread does not exist.")
@@ -181,19 +190,30 @@ def _cmd_run(args: argparse.Namespace) -> None:
         stdin_path = turn_path / STDIN_PATHNAME
         stdin_path.write_text(piped_stdin)
 
-    session_path = thread_path / SESSION_PATHNAME
-    response_path = turn_path / RESPONSE_PATHNAME
-    _execute_turn(session_path, response_path, prompt, piped_stdin=piped_stdin)
+    model_path = thread_path / MODEL_PATHNAME
+    model = model_path.read_text()
+
+    _execute_turn(
+        model=model,
+        session_path=thread_path / SESSION_PATHNAME,
+        prompt=prompt,
+        piped_stdin=piped_stdin,
+        response_path=turn_path / RESPONSE_PATHNAME,
+    )
 
 
 def _cmd_new(args: argparse.Namespace) -> None:
-    thread_name: str = args.name
+    name: str = args.name
+    model: str = args.model
 
-    thread_path = THREADS_PATH / thread_name
-    if thread_path.exists():
+    path = THREADS_PATH / name
+    if path.exists():
         sys.exit("Thread already exists.")
+    path.mkdir()
 
-    thread_path.mkdir()
+    # We tie the thread to a single model for simplicity
+    model_path = path / MODEL_PATHNAME
+    model_path.write_text(model)
 
 
 def _cmd_stage(args: argparse.Namespace) -> None:
@@ -247,9 +267,16 @@ def _cmd_commit(args: argparse.Namespace) -> None:
     turn_path = thread_path / f"{turn_idx:0{TURN_IDX_ZEROPAD}d}"
     staged_path.rename(turn_path)
 
-    session_path = thread_path / SESSION_PATHNAME
-    response_path = turn_path / RESPONSE_PATHNAME
-    _execute_turn(session_path, response_path, prompt, piped_stdin="")
+    model_path = thread_path / MODEL_PATHNAME
+    model = model_path.read_text()
+
+    _execute_turn(
+        model=model,
+        session_path=thread_path / SESSION_PATHNAME,
+        prompt=prompt,
+        piped_stdin="",
+        response_path=turn_path / RESPONSE_PATHNAME,
+    )
 
 
 def _cmd_clear(args: argparse.Namespace) -> None:
@@ -369,7 +396,12 @@ def _edit_prompt(thread_path: Path, draft: str) -> str:
 
 
 def _execute_turn(
-    session_path: Path, response_path: Path, prompt: str, *, piped_stdin: str
+    *,
+    model: str,
+    session_path: Path,
+    prompt: str,
+    piped_stdin: str,
+    response_path: Path,
 ) -> None:
     session_id: str | None = session_path.read_text() if session_path.exists() else None
 
@@ -381,7 +413,10 @@ def _execute_turn(
     sys.stdout.flush()
 
     inference_session_id, response = _run_inference(
-        session_id, prompt, piped_stdin=piped_stdin
+        model=model,
+        session_id=session_id,
+        prompt=prompt,
+        piped_stdin=piped_stdin,
     )
 
     if session_id is None:
@@ -396,10 +431,13 @@ def _execute_turn(
 
 
 def _run_inference(
-    session_id: str | None, prompt: str, *, piped_stdin: str
+    *, model: str, session_id: str | None, prompt: str, piped_stdin: str
 ) -> tuple[str, str]:
     command = [
         "claude",
+        prompt,
+        "--model",
+        model,
         # Make it stateless
         "--system-prompt",
         SYSTEM_PROMPT,
@@ -412,7 +450,6 @@ def _run_inference(
         "--output-format",
         "stream-json",
         "--verbose",
-        prompt,
     ]
 
     if session_id is not None:
