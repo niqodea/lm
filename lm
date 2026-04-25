@@ -51,11 +51,19 @@ PROMPT_SUMMARY_MAX_LENGTH = 100
 # We could leverage this to tap into some advanced use cases and efficiency improvements
 # as well as avoiding having two different states that might contradict each other
 # (if we manage to generate claude-compatible state on the fly, for example)
+# TODO: Implement workspaces in cwd
+# TODO: Implement attachments (text, pdf, images)
+# TODO: Implement thread renaming (or maybe aliasing with symlinks?)
+# TODO: Metacommands for thread management (Claude understands which thread to clean,
+# which to rename, etc. and comes up with a plan). Should this reside in this tool?
+# TODO: Check what the json events look like and extract other useful stuff
 
 LS_NAME_LENGTH = 15
 LS_PROMPT_LENGTH = 30
 LS_RESPONSE_LENGTH = 50
 
+# TODO: Have a setting for the default model, do not pass --model if not specified
+# TODO: Maybe have a setting to declare aliases for models
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 PROMPT_IS_LAST_EDITORS = {"vi", "vim", "nvim"}
