@@ -53,6 +53,8 @@ CHAR_DELAY = 1 / 1000
 # TODO: Implement top-to-bottom message strategy, but only with recognized editors that
 # can place the cursor at the bottom
 # TODO: Differentate prompt (text part) vs query (the whole)
+# TODO: files to resume conversation are stored locally!
+# We could leverage this to tap into some advanced use cases and efficiency improvements
 
 LS_NAME_LENGTH = 15
 LS_PROMPT_LENGTH = 30
