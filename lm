@@ -75,12 +75,20 @@ def main() -> None:
         "-t",
         "--thread",
         help="Thread name (maps to ~/.config/lm/threads/<name>)",
-        type=str,
     )
     run_parser.add_argument(
         "--preset",
         help="Preset name (maps to ~/.config/lm/presets/<name>.md)",
-        type=str,
+    )
+
+    new_parser = subparsers.add_parser(
+        "new",
+        help="Start a new thread.",
+    )
+    new_parser.set_defaults(func=_cmd_new)
+    new_parser.add_argument(
+        "name",
+        help="Thread name (maps to ~/.config/lm/threads/<name>)",
     )
 
     stage_parser = subparsers.add_parser(
@@ -89,15 +97,14 @@ def main() -> None:
     )
     stage_parser.set_defaults(func=_cmd_stage)
     stage_parser.add_argument(
+        "-t",
         "--thread",
         help="thread name (maps to ~/.config/lm/threads/<name>)",
-        type=str,
         required=True,
     )
     stage_parser.add_argument(
         "--preset",
         help="prompt name (maps to ~/.config/lm/presets/<name>.md)",
-        type=str,
     )
 
     commit_parser = subparsers.add_parser(
@@ -106,9 +113,9 @@ def main() -> None:
     )
     commit_parser.set_defaults(func=_cmd_commit)
     commit_parser.add_argument(
+        "-t",
         "--thread",
         help="Thread name (maps to ~/.config/lm/threads/<name>)",
-        type=str,
         required=True,
     )
 
@@ -120,7 +127,6 @@ def main() -> None:
     clear_parser.add_argument(
         "--thread",
         help="Thread name (maps to ~/.config/lm/threads/<name>)",
-        type=str,
         required=True,
     )
 
@@ -132,15 +138,21 @@ def main() -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
-    if args.thread is not None:
-        thread_name: str = args.thread
-    else:
-        thread_name = datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-        sys.stdout.write(f"No thread name provided, using timestamp: {thread_name}\n")
+    thread_name: str | None = args.thread
     preset_name: str | None = args.preset
 
-    thread_path = THREADS_PATH / thread_name
-    thread_path.mkdir(exist_ok=True)
+    if thread_name is not None:
+        thread_path = THREADS_PATH / thread_name
+    else:
+        thread_timestamp = (
+            datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+        )
+        sys.stdout.write(f"Creating new thread: {thread_timestamp}\n")
+        thread_path = THREADS_PATH / thread_timestamp
+        thread_path.mkdir()
+
+    if not thread_path.exists():
+        sys.exit("Thread does not exist.")
 
     if (thread_path / STAGED_PATHNAME).exists():
         sys.exit(
@@ -174,12 +186,23 @@ def _cmd_run(args: argparse.Namespace) -> None:
     _execute_turn(session_path, response_path, prompt, piped_stdin=piped_stdin)
 
 
+def _cmd_new(args: argparse.Namespace) -> None:
+    thread_name: str = args.name
+
+    thread_path = THREADS_PATH / thread_name
+    if thread_path.exists():
+        sys.exit("Thread already exists.")
+
+    thread_path.mkdir()
+
+
 def _cmd_stage(args: argparse.Namespace) -> None:
     thread_name: str = args.thread
     preset_name: str | None = args.preset
 
     thread_path = THREADS_PATH / thread_name
-    thread_path.mkdir(exist_ok=True)
+    if not thread_path.exists():
+        sys.exit("Thread does not exist.")
 
     staged_path = thread_path / STAGED_PATHNAME
     staged_path.mkdir(exist_ok=True)
