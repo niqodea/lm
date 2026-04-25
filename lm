@@ -9,11 +9,13 @@ import os
 import subprocess
 import sys
 import time
+import tomllib
 from itertools import count
 from pathlib import Path
 from typing import IO
 
 CONFIG_PATH = Path.home() / ".config" / "lm"
+SETTINGS_PATH = CONFIG_PATH / "settings.toml"
 PRESETS_PATH = CONFIG_PATH / "presets"
 EMPTY_CWD_PATH = CONFIG_PATH / ".empty-cwd"
 
@@ -40,11 +42,6 @@ You are a helpful assistant. Answer the question concisely.
 
 PROMPT_SUMMARY_MAX_LENGTH = 100
 
-# TODO: should we avoid hardcoding this? works fine for current latencies, but might be
-# annoying if streaming becomes faster in the future. Perhaps configurable, perhaps
-# automatically adapt?
-CHAR_DELAY = 1 / 1000
-
 # TODO: Provide something to initialize config directory once
 # TODO: Implement forking with symlinks to share common history between threads
 # Seems like we will need to fork at each turn to edit previous messages
@@ -65,6 +62,8 @@ LS_RESPONSE_LENGTH = 50
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 PROMPT_IS_LAST_EDITORS = {"vi", "vim", "nvim"}
+
+SETTINGS_CHAR_DELAY_KEY = "char_delay"
 
 
 def main() -> None:
@@ -514,6 +513,7 @@ def _run_inference(
     # clear screen, helps keeping text stationary as it streams
     sys.stdout.write("\033[2J\033[H")
     buffer = io.StringIO()
+    char_delay = _get_char_delay_from_settings()
     for line in process.stdout:
         event = json.loads(line)
 
@@ -526,10 +526,15 @@ def _run_inference(
         text = event["event"]["delta"]["text"]
 
         buffer.write(text)
-        for char in text:
-            sys.stdout.write(char)
+
+        if char_delay == 0.0:
+            sys.stdout.write(text)
             sys.stdout.flush()
-            time.sleep(CHAR_DELAY)
+        else:
+            for char in text:
+                sys.stdout.write(char)
+                sys.stdout.flush()
+                time.sleep(char_delay)
 
     buffer.write("\n")
     sys.stdout.write("\n")
@@ -580,6 +585,11 @@ def _build_history(thread_path: Path) -> list[tuple[str, str]]:
         response = response_path.read_text()
         entries.append((prompt, response))
     return entries
+
+
+def _get_char_delay_from_settings() -> float:
+    settings = tomllib.loads(SETTINGS_PATH.read_text())
+    return float(settings.get(SETTINGS_CHAR_DELAY_KEY, "0"))
 
 
 if __name__ == "__main__":
