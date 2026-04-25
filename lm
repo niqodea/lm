@@ -260,7 +260,7 @@ def _cmd_commit(args: argparse.Namespace) -> None:
         sys.exit("Thread does not exist.")
 
     staged_path = thread_path / STAGED_PATHNAME
-    if not thread_path.exists():
+    if not staged_path.exists():
         sys.exit("No staging area found.")
 
     staged_prompt_path = staged_path / PROMPT_PATHNAME
