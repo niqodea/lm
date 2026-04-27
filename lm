@@ -57,6 +57,7 @@ PROMPT_SUMMARY_MAX_LENGTH = 100
 # TODO: Metacommands for thread management (Claude understands which thread to clean,
 # which to rename, etc. and comes up with a plan). Should this reside in this tool?
 # TODO: Check what the json events look like and extract other useful stuff
+# TODO: Address conflict of fzf's bottom-up and less's top-down for thread listing
 
 LS_NAME_LENGTH = 15
 LS_PROMPT_LENGTH = 30
