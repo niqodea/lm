@@ -83,13 +83,19 @@ def main() -> None:
     )
     run_parser.set_defaults(func=_cmd_run)
     run_parser.add_argument(
+        "--preset",
+        help="Preset name (maps to ~/.config/lm/presets/<name>.md)",
+    )
+    stage_thread_group = run_parser.add_mutually_exclusive_group()
+    stage_thread_group.add_argument(
         "-t",
         "--thread",
         help="Thread name (maps to ~/.config/lm/threads/<name>)",
     )
-    run_parser.add_argument(
-        "--preset",
-        help="Preset name (maps to ~/.config/lm/presets/<name>.md)",
+    stage_thread_group.add_argument(
+        "--pick",
+        action="store_true",
+        help="Pick a thread interactively.",
     )
 
     new_parser = subparsers.add_parser(
@@ -113,14 +119,19 @@ def main() -> None:
     )
     stage_parser.set_defaults(func=_cmd_stage)
     stage_parser.add_argument(
-        "-t",
-        "--thread",
-        help="thread name (maps to ~/.config/lm/threads/<name>)",
-        required=True,
-    )
-    stage_parser.add_argument(
         "--preset",
         help="prompt name (maps to ~/.config/lm/presets/<name>.md)",
+    )
+    stage_thread_group = stage_parser.add_mutually_exclusive_group()
+    stage_thread_group.add_argument(
+        "-t",
+        "--thread",
+        help="Thread name (maps to ~/.config/lm/threads/<name>)",
+    )
+    stage_thread_group.add_argument(
+        "--pick",
+        action="store_true",
+        help="Pick a thread interactively.",
     )
 
     commit_parser = subparsers.add_parser(
@@ -128,11 +139,16 @@ def main() -> None:
         help="Run inference on the staging area.",
     )
     commit_parser.set_defaults(func=_cmd_commit)
-    commit_parser.add_argument(
+    commit_thread_group = commit_parser.add_mutually_exclusive_group()
+    commit_thread_group.add_argument(
         "-t",
         "--thread",
         help="Thread name (maps to ~/.config/lm/threads/<name>)",
-        required=True,
+    )
+    commit_thread_group.add_argument(
+        "--pick",
+        action="store_true",
+        help="Pick a thread interactively.",
     )
 
     clear_parser = subparsers.add_parser(
@@ -140,10 +156,16 @@ def main() -> None:
         help="Clear the staging area without running inference.",
     )
     clear_parser.set_defaults(func=_cmd_clear)
-    clear_parser.add_argument(
+    clear_thread_group = clear_parser.add_mutually_exclusive_group()
+    clear_thread_group.add_argument(
+        "-t",
         "--thread",
         help="Thread name (maps to ~/.config/lm/threads/<name>)",
-        required=True,
+    )
+    clear_thread_group.add_argument(
+        "--pick",
+        action="store_true",
+        help="Pick a thread interactively.",
     )
 
     ls_parser = subparsers.add_parser("ls", help="List threads.")
@@ -154,11 +176,13 @@ def main() -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
-    thread_name: str | None = args.thread
     preset_name: str | None = args.preset
 
-    if thread_name is not None:
+    if args.pick:
+        thread_name = _pick_thread()
         thread_path = THREADS_PATH / thread_name
+    elif args.thread is not None:
+        thread_path = THREADS_PATH / args.thread
     else:
         thread_timestamp = (
             datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
@@ -227,7 +251,7 @@ def _cmd_new(args: argparse.Namespace) -> None:
 
 
 def _cmd_stage(args: argparse.Namespace) -> None:
-    thread_name: str = args.thread
+    thread_name = _pick_thread() if args.pick else args.thread
     preset_name: str | None = args.preset
 
     thread_path = THREADS_PATH / thread_name
@@ -256,7 +280,7 @@ def _cmd_stage(args: argparse.Namespace) -> None:
 
 
 def _cmd_commit(args: argparse.Namespace) -> None:
-    thread_name: str = args.thread
+    thread_name = _pick_thread() if args.pick else args.thread
 
     thread_path = THREADS_PATH / thread_name
     if not thread_path.exists():
@@ -291,7 +315,7 @@ def _cmd_commit(args: argparse.Namespace) -> None:
 
 
 def _cmd_clear(args: argparse.Namespace) -> None:
-    thread_name: str = args.thread
+    thread_name = _pick_thread() if args.pick else args.thread
     thread_path = THREADS_PATH / thread_name
 
     if not thread_path.exists():
@@ -336,47 +360,73 @@ def _cmd_ls(_: argparse.Namespace) -> None:
 
 def _write_threads_summary(names: list[str], out: IO[str]) -> None:
     for name in names:
-        out.write(
-            f"{_compress_text(name, max_length=LS_NAME_LENGTH):<{LS_NAME_LENGTH}}"
+        out.write(_format_thread_summary_line(name) + "\n")
+
+
+def _format_thread_summary_line(name: str) -> str:
+    parts: list[str] = []
+
+    parts.append(f"{_compress_text(name, max_length=LS_NAME_LENGTH):<{LS_NAME_LENGTH}}")
+    parts.append("   ")
+
+    path = THREADS_PATH / name
+    turns_count = _get_turns_count(path)
+    parts.append(f"{turns_count:{TURN_IDX_ZEROPAD}d}t")
+    parts.append("   ")
+
+    last_turn_idx = turns_count - 1
+    last_turn_path = path / f"{last_turn_idx:0{TURN_IDX_ZEROPAD}d}"
+
+    last_prompt_path = last_turn_path / PROMPT_PATHNAME
+    if not last_prompt_path.exists():
+        parts.append(f"{'':<{LS_PROMPT_LENGTH}}")
+    else:
+        last_prompt = _compress_text(
+            _flatten_text(last_prompt_path.read_text()),
+            max_length=LS_PROMPT_LENGTH,
         )
+        parts.append(f"{last_prompt:<{LS_PROMPT_LENGTH}}")
 
-        out.write("   ")
+    parts.append("   ")
 
-        path = THREADS_PATH / name
-        turns_count = _get_turns_count(path)
-        out.write(f"{turns_count:{TURN_IDX_ZEROPAD}d}t")
+    last_response_path = last_turn_path / RESPONSE_PATHNAME
+    if not last_response_path.exists():
+        parts.append(f"{'':<{LS_RESPONSE_LENGTH}}")
+    else:
+        last_response = _compress_text(
+            _flatten_text(last_response_path.read_text()),
+            max_length=LS_RESPONSE_LENGTH,
+        )
+        parts.append(f"{last_response:<{LS_RESPONSE_LENGTH}}")
 
-        out.write("   ")
-
-        last_turn_idx = turns_count - 1
-        last_turn_path = path / f"{last_turn_idx:0{TURN_IDX_ZEROPAD}d}"
-
-        last_prompt_path = last_turn_path / PROMPT_PATHNAME
-        if not last_prompt_path.exists():
-            out.write(f"{'':<{LS_PROMPT_LENGTH}}")
-        else:
-            last_prompt = _compress_text(
-                _flatten_text(last_prompt_path.read_text()),
-                max_length=LS_PROMPT_LENGTH,
-            )
-            out.write(f"{last_prompt:<{LS_PROMPT_LENGTH}}")
-
-        out.write("   ")
-
-        last_response_path = last_turn_path / RESPONSE_PATHNAME
-        if not last_response_path.exists():
-            out.write(f"{'':<{LS_RESPONSE_LENGTH}}")
-        else:
-            last_response = _compress_text(
-                _flatten_text(last_response_path.read_text()),
-                max_length=LS_RESPONSE_LENGTH,
-            )
-            out.write(f"{last_response:<{LS_RESPONSE_LENGTH}}")
-
-        out.write("\n")
+    return "".join(parts)
 
 
 # ---
+
+
+def _pick_thread() -> str:
+    paths = sorted(
+        (p for p in THREADS_PATH.iterdir() if p.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not paths:
+        sys.exit("No threads found.")
+
+    summary_to_name = {_format_thread_summary_line(p.name): p.name for p in paths}
+
+    result = subprocess.run(
+        ["fzf", "--no-sort"],  # noqa: S607  (we expect path variable to be safe)
+        input="\n".join(summary_to_name),
+        stdout=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        sys.exit("No thread selected.")
+
+    return summary_to_name[result.stdout.rstrip("\n")]
 
 
 def _edit_prompt(thread_path: Path, draft: str) -> str:
@@ -415,7 +465,7 @@ def _edit_prompt(thread_path: Path, draft: str) -> str:
     editmsg_path.write_text("\n\n".join(components))
 
     with Path("/dev/tty").open() as tty:  # in case stdin is being piped
-        subprocess.run(  # noqa: S603
+        subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
             command,
             stdin=tty,
             stdout=sys.stdout,
