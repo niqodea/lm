@@ -84,20 +84,11 @@ def main() -> None:
     )
     run_parser.set_defaults(func=_cmd_run)
     run_parser.add_argument(
+        "-p",
         "--preset",
         help="Preset name (maps to ~/.config/lm/presets/<name>.md)",
     )
-    stage_thread_group = run_parser.add_mutually_exclusive_group()
-    stage_thread_group.add_argument(
-        "-t",
-        "--thread",
-        help="Thread name (maps to ~/.config/lm/threads/<name>)",
-    )
-    stage_thread_group.add_argument(
-        "--pick",
-        action="store_true",
-        help="Pick a thread interactively.",
-    )
+    _add_thread_args(run_parser, required=False)
 
     new_parser = subparsers.add_parser(
         "new",
@@ -109,6 +100,7 @@ def main() -> None:
         help="Thread name (maps to ~/.config/lm/threads/<name>)",
     )
     new_parser.add_argument(
+        "-m",
         "--model",
         help="Model to use for this thread.",
         default=DEFAULT_MODEL,
@@ -120,54 +112,25 @@ def main() -> None:
     )
     stage_parser.set_defaults(func=_cmd_stage)
     stage_parser.add_argument(
+        "-p",
         "--preset",
         help="prompt name (maps to ~/.config/lm/presets/<name>.md)",
     )
-    stage_thread_group = stage_parser.add_mutually_exclusive_group()
-    stage_thread_group.add_argument(
-        "-t",
-        "--thread",
-        help="Thread name (maps to ~/.config/lm/threads/<name>)",
-    )
-    stage_thread_group.add_argument(
-        "--pick",
-        action="store_true",
-        help="Pick a thread interactively.",
-    )
+    _add_thread_args(stage_parser, required=True)
 
     commit_parser = subparsers.add_parser(
         "commit",
         help="Run inference on the staging area.",
     )
     commit_parser.set_defaults(func=_cmd_commit)
-    commit_thread_group = commit_parser.add_mutually_exclusive_group()
-    commit_thread_group.add_argument(
-        "-t",
-        "--thread",
-        help="Thread name (maps to ~/.config/lm/threads/<name>)",
-    )
-    commit_thread_group.add_argument(
-        "--pick",
-        action="store_true",
-        help="Pick a thread interactively.",
-    )
+    _add_thread_args(commit_parser, required=True)
 
     clear_parser = subparsers.add_parser(
         "clear",
         help="Clear the staging area without running inference.",
     )
     clear_parser.set_defaults(func=_cmd_clear)
-    clear_thread_group = clear_parser.add_mutually_exclusive_group()
-    clear_thread_group.add_argument(
-        "-t",
-        "--thread",
-        help="Thread name (maps to ~/.config/lm/threads/<name>)",
-    )
-    clear_thread_group.add_argument(
-        "--pick",
-        action="store_true",
-        help="Pick a thread interactively.",
-    )
+    _add_thread_args(clear_parser, required=True)
 
     ls_parser = subparsers.add_parser("ls", help="List threads.")
     ls_parser.set_defaults(func=_cmd_ls)
@@ -177,13 +140,14 @@ def main() -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
+    if _has_thread_arg(args):
+        thread_name: str | None = _get_thread_arg(args)
+    else:
+        thread_name = None
     preset_name: str | None = args.preset
 
-    if args.pick:
-        thread_name = _pick_thread()
+    if thread_name is not None:
         thread_path = THREADS_PATH / thread_name
-    elif args.thread is not None:
-        thread_path = THREADS_PATH / args.thread
     else:
         thread_timestamp = (
             datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
@@ -193,9 +157,6 @@ def _cmd_run(args: argparse.Namespace) -> None:
         thread_path.mkdir()
         model_path = thread_path / MODEL_PATHNAME
         model_path.write_text(DEFAULT_MODEL)
-
-    if not thread_path.exists():
-        sys.exit("Thread does not exist.")
 
     if (thread_path / STAGED_PATHNAME).exists():
         sys.exit(
@@ -252,12 +213,10 @@ def _cmd_new(args: argparse.Namespace) -> None:
 
 
 def _cmd_stage(args: argparse.Namespace) -> None:
-    thread_name = _pick_thread() if args.pick else args.thread
+    thread_name = _get_thread_arg(args)
     preset_name: str | None = args.preset
 
     thread_path = THREADS_PATH / thread_name
-    if not thread_path.exists():
-        sys.exit("Thread does not exist.")
 
     staged_path = thread_path / STAGED_PATHNAME
     staged_path.mkdir(exist_ok=True)
@@ -281,11 +240,9 @@ def _cmd_stage(args: argparse.Namespace) -> None:
 
 
 def _cmd_commit(args: argparse.Namespace) -> None:
-    thread_name = _pick_thread() if args.pick else args.thread
+    thread_name = _get_thread_arg(args)
 
     thread_path = THREADS_PATH / thread_name
-    if not thread_path.exists():
-        sys.exit("Thread does not exist.")
 
     staged_path = thread_path / STAGED_PATHNAME
     if not staged_path.exists():
@@ -316,11 +273,8 @@ def _cmd_commit(args: argparse.Namespace) -> None:
 
 
 def _cmd_clear(args: argparse.Namespace) -> None:
-    thread_name = _pick_thread() if args.pick else args.thread
+    thread_name = _get_thread_arg(args)
     thread_path = THREADS_PATH / thread_name
-
-    if not thread_path.exists():
-        sys.exit("Thread does not exist.")
 
     staged_path = thread_path / STAGED_PATHNAME
 
@@ -357,6 +311,9 @@ def _cmd_ls(_: argparse.Namespace) -> None:
         if pager_proc.stdin is None:
             sys.exit("Unexpected error: Pager standard input not captured")
         _write_threads_summary(names, pager_proc.stdin)
+
+
+# ---
 
 
 def _write_threads_summary(names: list[str], out: IO[str]) -> None:
@@ -406,16 +363,52 @@ def _format_thread_summary_line(name: str) -> str:
 # ---
 
 
-def _pick_thread() -> str:
-    paths = sorted(
-        (p for p in THREADS_PATH.iterdir() if p.is_dir()),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
+def _add_thread_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
+    group = parser.add_mutually_exclusive_group(required=required)
+    group.add_argument(
+        "-t",
+        "--thread",
+        help="Thread name (maps to ~/.config/lm/threads/<name>)",
     )
-    if not paths:
+    group.add_argument(
+        "-l",
+        "--last",
+        action="store_true",
+        help="Use the last active thread.",
+    )
+    group.add_argument(
+        "-s",
+        "--select",
+        action="store_true",
+        help="Pick a thread interactively.",
+    )
+
+
+def _has_thread_arg(args: argparse.Namespace) -> bool:
+    return args.thread is not None or args.last is True or args.select is True
+
+
+def _get_thread_arg(args: argparse.Namespace) -> str:
+    if isinstance(args.thread, str):
+        if not (THREADS_PATH / args.thread).exists():
+            sys.exit("Thread does not exist.")
+        return args.thread
+    if args.last is True:
+        names = _get_threads()
+        if not names:
+            sys.exit("No threads found.")
+        return names[0]
+    if args.select is True:
+        return _select_thread()
+    raise RuntimeError("Thread not in arguments.")
+
+
+def _select_thread() -> str:
+    names = _get_threads()
+    if not names:
         sys.exit("No threads found.")
 
-    summary_to_name = {_format_thread_summary_line(p.name): p.name for p in paths}
+    summary_to_name = {_format_thread_summary_line(n): n for n in names}
 
     result = subprocess.run(
         ["fzf", "--no-sort"],  # noqa: S607  (we expect path variable to be safe)
@@ -428,6 +421,15 @@ def _pick_thread() -> str:
         sys.exit("No thread selected.")
 
     return summary_to_name[result.stdout.rstrip("\n")]
+
+
+def _get_threads() -> list[str]:
+    paths = sorted(
+        [p for p in THREADS_PATH.iterdir() if p.is_dir()],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return [p.name for p in paths]
 
 
 def _edit_prompt(thread_path: Path, draft: str) -> str:

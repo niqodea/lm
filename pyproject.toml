@@ -24,4 +24,6 @@ ignore = [
   "PLR",
   # Too opinionated on logs
   "EM101",
+  # Too opinionated on exceptions
+  "TRY003",
 ]
