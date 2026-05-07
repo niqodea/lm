@@ -56,8 +56,14 @@ PROMPT_SUMMARY_MAX_LENGTH = 100
 # TODO: Implement thread renaming (or maybe aliasing with symlinks?)
 # TODO: Metacommands for thread management (Claude understands which thread to clean,
 # which to rename, etc. and comes up with a plan). Should this reside in this tool?
+# Perhaps we could consider differentiating this tool (plain lm) vs self-referential
+# utilities (organizing threads is the obvious use case for now).
 # TODO: Check what the json events look like and extract other useful stuff
 # TODO: Address conflict of fzf's bottom-up and less's top-down for thread listing
+# TODO: Set Claude's session-id instead of parsing it from the output
+# TODO: Consider exposing json structured output as option. Best interface for it?
+# TODO: Have .claude-session thread dirs & symlink them to temp claude session UUIDs
+# TODO: Make some (most/all?) thread files read-only
 
 LS_NAME_LENGTH = 15
 LS_PROMPT_LENGTH = 30
