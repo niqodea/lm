@@ -43,7 +43,6 @@ You are a helpful assistant. Answer the question concisely.
 
 PROMPT_SUMMARY_MAX_LENGTH = 100
 
-# TODO: Provide something to initialize config directory once
 # TODO: Implement forking with symlinks to share common history between threads
 # Seems like we will need to fork at each turn to edit previous messages
 # TODO: Inspect claude command flags for further improvements
@@ -84,6 +83,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="lm")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialize configuration and data directories.",
+    )
+    init_parser.set_defaults(func=_cmd_init)
 
     run_parser = subparsers.add_parser(
         "run",
@@ -144,6 +149,20 @@ def main() -> None:
 
     args = parser.parse_args()
     args.func(args)
+
+
+def _cmd_init(_: argparse.Namespace) -> None:
+    config_path = _get_config_path()
+    data_path = _get_data_path()
+
+    if not config_path.exists():
+        config_path.mkdir()
+        (config_path / SETTINGS_PATHNAME).touch()
+
+    if not data_path.exists():
+        data_path.mkdir()
+        (data_path / THREADS_PATHNAME).mkdir()
+        (data_path / CLAUDE_EMPTY_CWD_DIRNAME).mkdir()
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
