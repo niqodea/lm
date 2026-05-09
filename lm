@@ -80,7 +80,7 @@ SETTINGS_CHAR_DELAY_KEY = "char_delay"
 
 
 def main() -> None:
-    """Entry point for the lm CLI."""
+    """Entry point for the CLI."""
     parser = argparse.ArgumentParser(prog="lm")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -534,7 +534,7 @@ def _execute_turn(
         _flatten_text(prompt), max_length=PROMPT_SUMMARY_MAX_LENGTH
     )
 
-    sys.stdout.write(f"Prompt: {prompt_summary}\nWaiting for lm response...")
+    sys.stdout.write(f"Prompt: {prompt_summary}\nWaiting for response...")
     sys.stdout.flush()
 
     inference_session_id, response = _run_inference(
