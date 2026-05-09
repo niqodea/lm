@@ -92,7 +92,7 @@ def main() -> None:
 
     run_parser = subparsers.add_parser(
         "run",
-        help="Stage a query and run inference in one command.",
+        help="Run inference on a prompt.",
     )
     run_parser.set_defaults(func=_cmd_run)
     run_parser.add_argument(
@@ -120,7 +120,7 @@ def main() -> None:
 
     stage_parser = subparsers.add_parser(
         "stage",
-        help="Stage a query without running inference.",
+        help="Stage a prompt without running inference.",
     )
     stage_parser.set_defaults(func=_cmd_stage)
     stage_parser.add_argument(
