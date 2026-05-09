@@ -36,41 +36,16 @@ STDIN_PATHNAME = "stdin"
 
 SCISSORS_LINE = "<!-- ------------------------ >8 ------------------------ -->"
 
-# TODO: Understand whether you can change this within a session
 SYSTEM_PROMPT = """\
 You are a helpful assistant. Answer the question concisely.
 """
 
 PROMPT_SUMMARY_MAX_LENGTH = 100
 
-# TODO: Implement forking with symlinks to share common history between threads
-# Seems like we will need to fork at each turn to edit previous messages
-# TODO: Inspect claude command flags for further improvements
-# TODO: Differentate prompt (text part) vs query (the whole)
-# TODO: files to resume conversation are stored locally!
-# We could leverage this to tap into some advanced use cases and efficiency improvements
-# as well as avoiding having two different states that might contradict each other
-# (if we manage to generate claude-compatible state on the fly, for example)
-# TODO: Implement attachments (text, pdf, images)
-# TODO: Implement thread renaming (or maybe aliasing with symlinks?)
-# TODO: Metacommands for thread management (Claude understands which thread to clean,
-# which to rename, etc. and comes up with a plan). Should this reside in this tool?
-# Perhaps we could consider differentiating this tool (plain lm) vs self-referential
-# utilities (organizing threads is the obvious use case for now).
-# TODO: Check what the json events look like and extract other useful stuff
-# TODO: Address conflict of fzf's bottom-up and less's top-down for thread listing
-# TODO: Set Claude's session-id instead of parsing it from the output
-# TODO: Consider exposing json structured output as option. Best interface for it?
-# TODO: Have .claude-session thread dirs & symlink them to temp claude session UUIDs
-# TODO: Make some (most/all?) thread files read-only
-# TODO: Consider whether to have more than just data as local, like git does
-
 LS_NAME_LENGTH = 15
 LS_PROMPT_LENGTH = 30
 LS_RESPONSE_LENGTH = 50
 
-# TODO: Have a setting for the default model, do not pass --model if not specified
-# TODO: Maybe have a setting to declare aliases for models
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 PROMPT_IS_LAST_EDITORS = {"vi", "vim", "nvim"}
@@ -200,7 +175,6 @@ def _cmd_run(args: argparse.Namespace) -> None:
     if not prompt:
         sys.exit("Prompt is empty, exiting.")
 
-    # TODO: Maybe instantiate this only after the response is received?
     turn_idx = _get_turns_count(thread_path)
     turn_path = thread_path / f"{turn_idx:0{TURN_IDX_ZEROPAD}d}"
     turn_path.mkdir()
@@ -594,7 +568,6 @@ def _run_inference(
         "--system-prompt",
         SYSTEM_PROMPT,
         "--print",
-        # TODO: Understand which tool to activate & when
         "--tools",
         "",
         # To stream response text
@@ -621,9 +594,6 @@ def _run_inference(
     if process.stdin is None or process.stdout is None:
         sys.exit("Unexpected error: Claude standard streams not captured")
 
-    # TODO: Understand difference of stdin vs @ read directives.
-    # If not that different, we could think of unifying stdin as just another
-    # attachment.
     process.stdin.write(piped_stdin)
     process.stdin.close()
 
