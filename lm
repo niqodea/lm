@@ -14,12 +14,13 @@ from itertools import count
 from pathlib import Path
 from typing import IO
 
-CONFIG_PATH = Path.home() / ".config" / "lm"
-SETTINGS_PATH = CONFIG_PATH / "settings.toml"
-PRESETS_PATH = CONFIG_PATH / "presets"
-EMPTY_CWD_PATH = CONFIG_PATH / ".empty-cwd"
+LM_DATA_DIR_ENV = "LM_DATA_DIR"
 
-THREADS_PATH = CONFIG_PATH / "threads"
+SETTINGS_PATHNAME = "settings.toml"
+PRESETS_PATHNAME = "presets"
+
+THREADS_PATHNAME = "threads"
+CLAUDE_EMPTY_CWD_DIRNAME = ".claude-empty-cwd"
 
 TURN_IDX_ZEROPAD = 2
 MODEL_PATHNAME = ".model"
@@ -146,20 +147,24 @@ def main() -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
+    config_path = _get_config_path()
+    data_path = _get_data_path()
+    threads_path = data_path / THREADS_PATHNAME
+
     if _has_thread_arg(args):
-        thread_name: str | None = _get_thread_arg(args)
+        thread_name: str | None = _get_thread_arg(args, threads_path)
     else:
         thread_name = None
     preset_name: str | None = args.preset
 
     if thread_name is not None:
-        thread_path = THREADS_PATH / thread_name
+        thread_path = threads_path / thread_name
     else:
         thread_timestamp = (
             datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
         )
         sys.stdout.write(f"Creating new thread: {thread_timestamp}\n")
-        thread_path = THREADS_PATH / thread_timestamp
+        thread_path = threads_path / thread_timestamp
         thread_path.mkdir()
         model_path = thread_path / MODEL_PATHNAME
         model_path.write_text(DEFAULT_MODEL)
@@ -170,7 +175,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
             "Please commit or clear the staging area first."
         )
 
-    draft = _get_preset(preset_name) if preset_name is not None else ""
+    draft = _get_preset(preset_name, config_path) if preset_name is not None else ""
 
     prompt = _edit_prompt(thread_path, draft)
     if not prompt:
@@ -201,14 +206,19 @@ def _cmd_run(args: argparse.Namespace) -> None:
         prompt=prompt,
         piped_stdin=piped_stdin,
         response_path=turn_path / RESPONSE_PATHNAME,
+        char_delay=_get_char_delay_from_settings(config_path),
+        claude_empty_cwd_path=data_path / CLAUDE_EMPTY_CWD_DIRNAME,
     )
 
 
 def _cmd_new(args: argparse.Namespace) -> None:
+    data_path = _get_data_path()
+    threads_path = data_path / THREADS_PATHNAME
+
     name: str = args.name
     model: str = args.model
 
-    path = THREADS_PATH / name
+    path = threads_path / name
     if path.exists():
         sys.exit("Thread already exists.")
     path.mkdir()
@@ -219,10 +229,14 @@ def _cmd_new(args: argparse.Namespace) -> None:
 
 
 def _cmd_stage(args: argparse.Namespace) -> None:
-    thread_name = _get_thread_arg(args)
+    config_path = _get_config_path()
+    data_path = _get_data_path()
+    threads_path = data_path / THREADS_PATHNAME
+
+    thread_name = _get_thread_arg(args, threads_path)
     preset_name: str | None = args.preset
 
-    thread_path = THREADS_PATH / thread_name
+    thread_path = threads_path / thread_name
 
     staged_path = thread_path / STAGED_PATHNAME
     staged_path.mkdir(exist_ok=True)
@@ -233,7 +247,7 @@ def _cmd_stage(args: argparse.Namespace) -> None:
         case False, None:
             draft = ""
         case False, str():
-            draft = _get_preset(preset_name)
+            draft = _get_preset(preset_name, config_path)
         case True, None:
             draft = staged_prompt_path.read_text()
         case True, str():
@@ -246,9 +260,13 @@ def _cmd_stage(args: argparse.Namespace) -> None:
 
 
 def _cmd_commit(args: argparse.Namespace) -> None:
-    thread_name = _get_thread_arg(args)
+    config_path = _get_config_path()
+    data_path = _get_data_path()
+    threads_path = data_path / THREADS_PATHNAME
 
-    thread_path = THREADS_PATH / thread_name
+    thread_name = _get_thread_arg(args, threads_path)
+
+    thread_path = threads_path / thread_name
 
     staged_path = thread_path / STAGED_PATHNAME
     if not staged_path.exists():
@@ -275,12 +293,18 @@ def _cmd_commit(args: argparse.Namespace) -> None:
         prompt=prompt,
         piped_stdin="",
         response_path=turn_path / RESPONSE_PATHNAME,
+        char_delay=_get_char_delay_from_settings(config_path),
+        claude_empty_cwd_path=data_path / CLAUDE_EMPTY_CWD_DIRNAME,
     )
 
 
 def _cmd_clear(args: argparse.Namespace) -> None:
-    thread_name = _get_thread_arg(args)
-    thread_path = THREADS_PATH / thread_name
+    data_path = _get_data_path()
+    threads_path = data_path / THREADS_PATHNAME
+
+    thread_name = _get_thread_arg(args, threads_path)
+
+    thread_path = threads_path / thread_name
 
     staged_path = thread_path / STAGED_PATHNAME
 
@@ -294,8 +318,11 @@ def _cmd_clear(args: argparse.Namespace) -> None:
 
 
 def _cmd_ls(_: argparse.Namespace) -> None:
+    data_path = _get_data_path()
+    threads_path = data_path / THREADS_PATHNAME
+
     paths = sorted(
-        (p for p in THREADS_PATH.iterdir() if p.is_dir()),
+        (p for p in threads_path.iterdir() if p.is_dir()),
         # NOTE: Not a super robust way to sort by last activity, but simple and works
         key=lambda p: p.stat().st_mtime,
         reverse=True,
@@ -303,7 +330,7 @@ def _cmd_ls(_: argparse.Namespace) -> None:
     names = [p.name for p in paths]
 
     if not sys.stdout.isatty():
-        _write_threads_summary(names, sys.stdout)
+        _write_threads_summary(names, sys.stdout, threads_path)
         return
 
     pager = os.getenv("PAGER", "less")
@@ -316,24 +343,25 @@ def _cmd_ls(_: argparse.Namespace) -> None:
     ) as pager_proc:
         if pager_proc.stdin is None:
             sys.exit("Unexpected error: Pager standard input not captured")
-        _write_threads_summary(names, pager_proc.stdin)
+        _write_threads_summary(names, pager_proc.stdin, threads_path)
 
 
 # ---
 
 
-def _write_threads_summary(names: list[str], out: IO[str]) -> None:
+def _write_threads_summary(names: list[str], out: IO[str], threads_path: Path) -> None:
     for name in names:
-        out.write(_format_thread_summary_line(name) + "\n")
+        path = threads_path / name
+        out.write(_format_thread_summary_line(path) + "\n")
 
 
-def _format_thread_summary_line(name: str) -> str:
+def _format_thread_summary_line(path: Path) -> str:
     parts: list[str] = []
 
+    name = path.name
     parts.append(f"{_compress_text(name, max_length=LS_NAME_LENGTH):<{LS_NAME_LENGTH}}")
     parts.append("   ")
 
-    path = THREADS_PATH / name
     turns_count = _get_turns_count(path)
     parts.append(f"{turns_count:{TURN_IDX_ZEROPAD}d}t")
     parts.append("   ")
@@ -394,27 +422,27 @@ def _has_thread_arg(args: argparse.Namespace) -> bool:
     return args.thread is not None or args.last is True or args.select is True
 
 
-def _get_thread_arg(args: argparse.Namespace) -> str:
+def _get_thread_arg(args: argparse.Namespace, threads_path: Path) -> str:
     if isinstance(args.thread, str):
-        if not (THREADS_PATH / args.thread).exists():
+        if not (threads_path / args.thread).exists():
             sys.exit("Thread does not exist.")
         return args.thread
     if args.last is True:
-        names = _get_threads()
+        names = _get_threads(threads_path)
         if not names:
             sys.exit("No threads found.")
         return names[0]
     if args.select is True:
-        return _select_thread()
+        return _select_thread(threads_path)
     raise RuntimeError("Thread not in arguments.")
 
 
-def _select_thread() -> str:
-    names = _get_threads()
+def _select_thread(threads_path: Path) -> str:
+    names = _get_threads(threads_path)
     if not names:
         sys.exit("No threads found.")
 
-    summary_to_name = {_format_thread_summary_line(n): n for n in names}
+    summary_to_name = {_format_thread_summary_line(threads_path / n): n for n in names}
 
     result = subprocess.run(
         ["fzf", "--no-sort"],  # noqa: S607  (we expect path variable to be safe)
@@ -429,9 +457,9 @@ def _select_thread() -> str:
     return summary_to_name[result.stdout.rstrip("\n")]
 
 
-def _get_threads() -> list[str]:
+def _get_threads(threads_path: Path) -> list[str]:
     paths = sorted(
-        [p for p in THREADS_PATH.iterdir() if p.is_dir()],
+        [p for p in threads_path.iterdir() if p.is_dir()],
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -497,6 +525,8 @@ def _execute_turn(
     prompt: str,
     piped_stdin: str,
     response_path: Path,
+    char_delay: float,
+    claude_empty_cwd_path: Path,
 ) -> None:
     session_id: str | None = session_path.read_text() if session_path.exists() else None
 
@@ -512,6 +542,8 @@ def _execute_turn(
         session_id=session_id,
         prompt=prompt,
         piped_stdin=piped_stdin,
+        char_delay=char_delay,
+        claude_empty_cwd_path=claude_empty_cwd_path,
     )
 
     if session_id is None:
@@ -526,7 +558,13 @@ def _execute_turn(
 
 
 def _run_inference(
-    *, model: str, session_id: str | None, prompt: str, piped_stdin: str
+    *,
+    model: str,
+    session_id: str | None,
+    prompt: str,
+    piped_stdin: str,
+    char_delay: float,
+    claude_empty_cwd_path: Path,
 ) -> tuple[str, str]:
     command = [
         "claude",
@@ -557,15 +595,16 @@ def _run_inference(
         text=True,
         # --bare / CLAUDE_CODE_SIMPLE disables OAuth and routes billing to API
         # Still, as long as we set CWD to a bare directory, no CLAUDE.md will be
-        # picked up
-        cwd=EMPTY_CWD_PATH,
+        # picked up.
+        cwd=claude_empty_cwd_path,
     )
 
     if process.stdin is None or process.stdout is None:
         sys.exit("Unexpected error: Claude standard streams not captured")
 
-    # TODO: Understand difference of stdin vs @ read directives
-    # If not that different, we could think of unifying stdin as just another attachment
+    # TODO: Understand difference of stdin vs @ read directives.
+    # If not that different, we could think of unifying stdin as just another
+    # attachment.
     process.stdin.write(piped_stdin)
     process.stdin.close()
 
@@ -576,7 +615,6 @@ def _run_inference(
     # clear screen, helps keeping text stationary as it streams
     sys.stdout.write("\033[2J\033[H")
     buffer = io.StringIO()
-    char_delay = _get_char_delay_from_settings()
     for line in process.stdout:
         event = json.loads(line)
 
@@ -619,8 +657,9 @@ def _get_turns_count(thread_path: Path) -> int:
     raise AssertionError("Unreachable")
 
 
-def _get_preset(name: str) -> str:
-    path = PRESETS_PATH / f"{name}.md"
+def _get_preset(name: str, config_path: Path) -> str:
+    presets_path = config_path / PRESETS_PATHNAME
+    path = presets_path / f"{name}.md"
     if not path.exists():
         sys.exit(f"Preset not found: {path}")
     return path.read_text()
@@ -650,9 +689,28 @@ def _build_history(thread_path: Path) -> list[tuple[str, str]]:
     return entries
 
 
-def _get_char_delay_from_settings() -> float:
-    settings = tomllib.loads(SETTINGS_PATH.read_text())
+def _get_char_delay_from_settings(config_path: Path) -> float:
+    settings_path = config_path / SETTINGS_PATHNAME
+    settings = tomllib.loads(settings_path.read_text())
     return float(settings.get(SETTINGS_CHAR_DELAY_KEY, "0"))
+
+
+def _get_config_path() -> Path:
+    if (xdg_config_home := os.environ.get("XDG_CONFIG_HOME")) is not None:
+        config_home_path = Path(xdg_config_home)
+    else:
+        config_home_path = Path.home() / ".config"
+    return config_home_path / "lm"
+
+
+def _get_data_path() -> Path:
+    if (lm_data_dir := os.environ.get(LM_DATA_DIR_ENV)) is not None:
+        return Path(lm_data_dir)
+    if (xdg_data_home := os.environ.get("XDG_DATA_HOME")) is not None:
+        data_home_path = Path(xdg_data_home)
+    else:
+        data_home_path = Path.home() / ".local/share"
+    return data_home_path / "lm"
 
 
 if __name__ == "__main__":
