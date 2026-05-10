@@ -1,7 +1,4 @@
 # Now
-- Only instantiate turn path after the response is received.
-  However, how to go about keeping the user's prompt?
-  Maybe stage it?
 - Implement thread renaming (or maybe aliasing with symlinks?).
 - Store Claude session data inside the thread dir as the source of truth, and symlink it into Claude's expected location on resume so that Claude writes directly to the thread dir transparently.
 - Implement attachments (text, pdf, images, maybe audio?) in stage (and maybe run too?).
