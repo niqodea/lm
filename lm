@@ -26,6 +26,7 @@ TURN_IDX_ZEROPAD = 2
 MODEL_PATHNAME = ".model"
 SESSION_PATHNAME = ".session"
 EDITMSG_PATHNAME = ".EDITMSG.md"
+TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE = ".{timestamp}-EDITMSG.md"
 STAGED_PATHNAME = "STAGED"
 
 PROMPT_PATHNAME = "prompt.md"
@@ -151,28 +152,32 @@ def _cmd_run(args: argparse.Namespace) -> None:
         thread_name = None
     preset_name: str | None = args.preset
 
+    draft = _get_preset(preset_name, config_path) if preset_name is not None else ""
+
     if thread_name is not None:
         thread_path = threads_path / thread_name
+        if (thread_path / STAGED_PATHNAME).exists():
+            sys.exit(
+                "Staging area already exists, cannot run. "
+                "Please commit or clear the staging area first."
+            )
+        editmsg_path = thread_path / EDITMSG_PATHNAME
+        history = _build_history(thread_path)
+        prompt = _edit_prompt(editmsg_path, history=history, draft=draft)
     else:
         thread_timestamp = (
             datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
         )
+        editmsg_pathname = TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE.format(
+            timestamp=thread_timestamp
+        )
+        editmsg_path = threads_path / editmsg_pathname
+        prompt = _edit_prompt(editmsg_path, history=[], draft=draft)
+
         sys.stdout.write(f"Creating new thread: {thread_timestamp}\n")
         thread_path = threads_path / thread_timestamp
         thread_path.mkdir()
         _write_read_only(thread_path / MODEL_PATHNAME, DEFAULT_MODEL)
-
-    if (thread_path / STAGED_PATHNAME).exists():
-        sys.exit(
-            "Staging area already exists, cannot run. "
-            "Please commit or clear the staging area first."
-        )
-
-    draft = _get_preset(preset_name, config_path) if preset_name is not None else ""
-
-    prompt = _edit_prompt(thread_path, draft)
-    if not prompt:
-        sys.exit("Prompt is empty, exiting.")
 
     staged_path = thread_path / STAGED_PATHNAME
     staged_path.mkdir()
@@ -239,7 +244,8 @@ def _cmd_stage(args: argparse.Namespace) -> None:
         case True, str():
             sys.exit("Staged prompt already exists, cannot apply preset.")
 
-    prompt = _edit_prompt(thread_path, draft)
+    history = _build_history(thread_path)
+    prompt = _edit_prompt(thread_path / EDITMSG_PATHNAME, history=history, draft=draft)
 
     # new line at the end to be in line with response and stick to best practices
     staged_prompt_path.write_text(f"{prompt}\n")
@@ -450,21 +456,19 @@ def _get_threads(threads_path: Path) -> list[str]:
     return [p.name for p in paths]
 
 
-def _edit_prompt(thread_path: Path, draft: str) -> str:
-    editmsg_path = thread_path / EDITMSG_PATHNAME
-    history = _build_history(thread_path)
+def _edit_prompt(path: Path, *, history: list[tuple[str, str]], draft: str) -> str:
     editor = os.getenv("EDITOR", "vim")
 
     prompt_is_last = editor in PROMPT_IS_LAST_EDITORS
 
     if prompt_is_last:
-        command = [editor, "+", str(editmsg_path)]
+        command = [editor, "+", str(path)]
         scissors_line_component = (
             "<!-- Everything above this scissors line will be ignored. -->\n"
             f"{SCISSORS_LINE}\n"
         )
     else:
-        command = [editor, str(editmsg_path)]
+        command = [editor, str(path)]
         scissors_line_component = (
             f"{SCISSORS_LINE}\n"
             "<!-- Everything below this scissors line will be ignored. -->\n"
@@ -483,7 +487,7 @@ def _edit_prompt(thread_path: Path, draft: str) -> str:
     if not prompt_is_last:
         components.reverse()
 
-    editmsg_path.write_text("\n\n".join(components))
+    path.write_text("\n\n".join(components))
 
     with Path("/dev/tty").open() as tty:  # in case stdin is being piped
         subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
@@ -494,12 +498,16 @@ def _edit_prompt(thread_path: Path, draft: str) -> str:
             check=True,
         )
 
-    editmsg_fragments = editmsg_path.read_text().split(f"\n{SCISSORS_LINE}\n")
-    editmsg_path.unlink()
+    editmsg_fragments = path.read_text().split(f"\n{SCISSORS_LINE}\n")
+    path.unlink()
 
-    prompt = editmsg_fragments[-1] if prompt_is_last else editmsg_fragments[0]
+    prompt_fragment = editmsg_fragments[-1] if prompt_is_last else editmsg_fragments[0]
+    prompt = prompt_fragment.strip()
 
-    return prompt.strip()
+    if not prompt:
+        sys.exit("Prompt is empty, exiting.")
+
+    return prompt
 
 
 def _execute_turn(
