@@ -333,6 +333,7 @@ def _cmd_ls(_: argparse.Namespace) -> None:
         pager,
         stdin=subprocess.PIPE,
         text=True,
+        env=env,
     ) as pager_proc:
         if pager_proc.stdin is None:
             sys.exit("Unexpected error: Pager standard input not captured")
