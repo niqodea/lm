@@ -4,6 +4,8 @@
 - Implement attachments (text, pdf, images, maybe audio?) in stage (and maybe run too?).
   Will most likely need Claude's @ directives.
 - Print cleanly to stdout (opt-in setting? leverage stderr?).
+- Implement a chat command to loop back to editor once response is streamed.
+- Address long names in `lm ls` / `--select`
 
 # Later
 - Explore Claude's @ directives in depth and how to make the most of them.
