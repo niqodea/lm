@@ -161,7 +161,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
         thread_path = threads_path / thread_timestamp
         thread_path.mkdir()
         model_path = thread_path / MODEL_PATHNAME
-        model_path.write_text(DEFAULT_MODEL)
+        _write_read_only(model_path, DEFAULT_MODEL)
 
     if (thread_path / STAGED_PATHNAME).exists():
         sys.exit(
@@ -181,14 +181,14 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
     prompt_path = turn_path / PROMPT_PATHNAME
     # new line at the end to be in line with response and stick to best practices
-    prompt_path.write_text(f"{prompt}\n")
+    _write_read_only(prompt_path, f"{prompt}\n")
 
     if sys.stdin.isatty():
         piped_stdin = ""
     else:
         piped_stdin = sys.stdin.read()
         stdin_path = turn_path / STDIN_PATHNAME
-        stdin_path.write_text(piped_stdin)
+        _write_read_only(stdin_path, piped_stdin)
 
     model_path = thread_path / MODEL_PATHNAME
     model = model_path.read_text()
@@ -218,7 +218,7 @@ def _cmd_new(args: argparse.Namespace) -> None:
 
     # We tie the thread to a single model for simplicity
     model_path = path / MODEL_PATHNAME
-    model_path.write_text(model)
+    _write_read_only(model_path, model)
 
 
 def _cmd_stage(args: argparse.Namespace) -> None:
@@ -541,14 +541,16 @@ def _execute_turn(
     )
 
     if session_id is None:
-        session_path.write_text(inference_session_id)
+        _write_read_only(session_path, inference_session_id)
     elif inference_session_id != session_id:
         sys.exit(
             f"Session ID mismatch between inference result and session file: "
             f"{inference_session_id} != {session_id}"
         )
 
-    response_path.write_text(response)  # seems like \n is always there at the end
+    _write_read_only(
+        response_path, response
+    )  # seems like \n is always there at the end
 
 
 def _run_inference(
@@ -713,6 +715,12 @@ def _get_data_path(*, missing_ok: bool) -> Path:
         sys.exit(f"Data directory not found: {path}\nRun `lm init` to initialize it.")
 
     return path
+
+
+def _write_read_only(path: Path, content: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
 
 
 if __name__ == "__main__":

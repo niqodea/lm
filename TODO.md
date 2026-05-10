@@ -1,5 +1,4 @@
 # Now
-- Make some (most/all?) thread files read-only.
 - Only instantiate turn path after the response is received.
   However, how to go about keeping the user's prompt?
   Maybe stage it?
