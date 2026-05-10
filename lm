@@ -177,13 +177,13 @@ def _cmd_run(args: argparse.Namespace) -> None:
     staged_path = thread_path / STAGED_PATHNAME
     staged_path.mkdir()
     # new line at the end to be in line with response and stick to best practices
-    _write_read_only(staged_path / PROMPT_PATHNAME, f"{prompt}\n")
+    (staged_path / PROMPT_PATHNAME).write_text(f"{prompt}\n")
 
     if sys.stdin.isatty():
         piped_stdin = ""
     else:
         piped_stdin = sys.stdin.read()
-        _write_read_only(staged_path / STDIN_PATHNAME, piped_stdin)
+        (staged_path / STDIN_PATHNAME).write_text(piped_stdin)
 
     response = _execute_turn(
         model=(thread_path / MODEL_PATHNAME).read_text(),
@@ -194,9 +194,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
         claude_empty_cwd_path=data_path / CLAUDE_EMPTY_CWD_DIRNAME,
     )
 
-    turn_path = thread_path / f"{_get_turns_count(thread_path):0{TURN_IDX_ZEROPAD}d}"
-    staged_path.rename(turn_path)
-    _write_read_only(turn_path / RESPONSE_PATHNAME, response)
+    _commit_staged(thread_path, response)
 
 
 def _cmd_new(args: argparse.Namespace) -> None:
@@ -280,9 +278,7 @@ def _cmd_commit(args: argparse.Namespace) -> None:
         claude_empty_cwd_path=data_path / CLAUDE_EMPTY_CWD_DIRNAME,
     )
 
-    turn_path = thread_path / f"{_get_turns_count(thread_path):0{TURN_IDX_ZEROPAD}d}"
-    staged_path.rename(turn_path)
-    _write_read_only(turn_path / RESPONSE_PATHNAME, response)
+    _commit_staged(thread_path, response)
 
 
 def _cmd_clear(args: argparse.Namespace) -> None:
@@ -712,6 +708,21 @@ def _write_read_only(path: Path, content: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
     with os.fdopen(fd, "w") as f:
         f.write(content)
+
+
+def _commit_staged(thread_path: Path, response: str) -> None:
+    staged_path = thread_path / STAGED_PATHNAME
+
+    turn_idx = _get_turns_count(thread_path)
+    turn_path = thread_path / f"{turn_idx:0{TURN_IDX_ZEROPAD}d}"
+
+    staged_path.rename(turn_path)
+
+    for path in turn_path.rglob("*"):
+        if path.is_file():
+            path.chmod(0o444)
+
+    _write_read_only(turn_path / RESPONSE_PATHNAME, response)
 
 
 if __name__ == "__main__":
