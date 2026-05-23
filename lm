@@ -96,7 +96,7 @@ def main() -> None:
 
     stage_parser = subparsers.add_parser(
         "stage",
-        help="Stage a prompt without running inference.",
+        help="Stage a prompt for the query.",
     )
     stage_parser.set_defaults(func=_cmd_stage)
     stage_parser.add_argument(
@@ -108,14 +108,14 @@ def main() -> None:
 
     commit_parser = subparsers.add_parser(
         "commit",
-        help="Run inference on the staging area.",
+        help="Run inference on the staged query.",
     )
     commit_parser.set_defaults(func=_cmd_commit)
     _add_thread_args(commit_parser, required=True)
 
     clear_parser = subparsers.add_parser(
         "clear",
-        help="Clear the staging area without running inference.",
+        help="Clear the staged query without running inference.",
     )
     clear_parser.set_defaults(func=_cmd_clear)
     _add_thread_args(clear_parser, required=True)
@@ -158,8 +158,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
         thread_path = threads_path / thread_name
         if (thread_path / STAGED_PATHNAME).exists():
             sys.exit(
-                "Staging area already exists, cannot run. "
-                "Please commit or clear the staging area first."
+                "Staged query already exists, cannot run. "
+                "Please commit or clear the staged query first."
             )
         editmsg_path = thread_path / EDITMSG_PATHNAME
         history = _build_history(thread_path)
@@ -262,7 +262,7 @@ def _cmd_commit(args: argparse.Namespace) -> None:
 
     staged_path = thread_path / STAGED_PATHNAME
     if not staged_path.exists():
-        sys.exit("No staging area found.")
+        sys.exit("No staged query found.")
 
     staged_prompt_path = staged_path / PROMPT_PATHNAME
     if not staged_prompt_path.exists():
@@ -298,7 +298,7 @@ def _cmd_clear(args: argparse.Namespace) -> None:
     staged_path = thread_path / STAGED_PATHNAME
 
     if not staged_path.exists():
-        sys.exit("No staging area found.")
+        sys.exit("No staged query found.")
 
     staged_prompt_path = staged_path / PROMPT_PATHNAME
     staged_prompt_path.unlink(missing_ok=True)
