@@ -94,6 +94,20 @@ def main() -> None:
         default=DEFAULT_MODEL,
     )
 
+    mv_parser = subparsers.add_parser(
+        "mv",
+        help="Rename a thread.",
+    )
+    mv_parser.set_defaults(func=_cmd_mv)
+    mv_parser.add_argument(
+        "src",
+        help="Source thread name.",
+    )
+    mv_parser.add_argument(
+        "dst",
+        help="Destination thread name.",
+    )
+
     stage_parser = subparsers.add_parser(
         "stage",
         help="Stage a prompt for the query.",
@@ -146,16 +160,11 @@ def _cmd_run(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    if _has_thread_arg(args):
-        thread_name: str | None = _get_thread_arg(args, threads_path)
-    else:
-        thread_name = None
     preset_name: str | None = args.preset
-
     draft = _get_preset(preset_name, config_path) if preset_name is not None else ""
 
-    if thread_name is not None:
-        thread_path = threads_path / thread_name
+    if _has_thread_arg(args):
+        thread_path = _get_thread_path(args, threads_path)
         if (thread_path / STAGED_PATHNAME).exists():
             sys.exit(
                 "Staged query already exists, cannot run. "
@@ -210,8 +219,7 @@ def _cmd_new(args: argparse.Namespace) -> None:
     model: str = args.model
 
     path = threads_path / name
-    if path.exists():
-        sys.exit("Thread already exists.")
+    _assert_thread_doesnt_exist(path)
     path.mkdir()
 
     # We tie the thread to a single model for simplicity
@@ -219,15 +227,26 @@ def _cmd_new(args: argparse.Namespace) -> None:
     _write_read_only(model_path, model)
 
 
+def _cmd_mv(args: argparse.Namespace) -> None:
+    data_path = _get_data_path(missing_ok=False)
+    threads_path = data_path / THREADS_PATHNAME
+
+    src_path = threads_path / args.src
+    dst_path = threads_path / args.dst
+
+    _assert_thread_exists(src_path)
+    _assert_thread_doesnt_exist(dst_path)
+
+    src_path.rename(dst_path)
+
+
 def _cmd_stage(args: argparse.Namespace) -> None:
     config_path = _get_config_path(missing_ok=False)
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread_name = _get_thread_arg(args, threads_path)
+    thread_path = _get_thread_path(args, threads_path)
     preset_name: str | None = args.preset
-
-    thread_path = threads_path / thread_name
 
     staged_path = thread_path / STAGED_PATHNAME
     staged_path.mkdir(exist_ok=True)
@@ -256,9 +275,7 @@ def _cmd_commit(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread_name = _get_thread_arg(args, threads_path)
-
-    thread_path = threads_path / thread_name
+    thread_path = _get_thread_path(args, threads_path)
 
     staged_path = thread_path / STAGED_PATHNAME
     if not staged_path.exists():
@@ -291,9 +308,7 @@ def _cmd_clear(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread_name = _get_thread_arg(args, threads_path)
-
-    thread_path = threads_path / thread_name
+    thread_path = _get_thread_path(args, threads_path)
 
     staged_path = thread_path / STAGED_PATHNAME
 
@@ -412,19 +427,24 @@ def _has_thread_arg(args: argparse.Namespace) -> bool:
     return args.thread is not None or args.last is True or args.select is True
 
 
-def _get_thread_arg(args: argparse.Namespace, threads_path: Path) -> str:
+def _get_thread_path(args: argparse.Namespace, threads_path: Path) -> Path:
     if isinstance(args.thread, str):
-        if not (threads_path / args.thread).exists():
-            sys.exit("Thread does not exist.")
-        return args.thread
-    if args.last is True:
+        thread_name = args.thread
+    elif args.last is True:
         names = _get_threads(threads_path)
         if not names:
             sys.exit("No threads found.")
-        return names[0]
-    if args.select is True:
-        return _select_thread(threads_path)
-    raise RuntimeError("Thread not in arguments.")
+        thread_name = names[0]
+    elif args.select is True:
+        thread_name = _select_thread(threads_path)
+    else:
+        raise RuntimeError("Thread not in arguments.")
+
+    thread_path = threads_path / thread_name
+
+    _assert_thread_exists(thread_path)
+
+    return thread_path
 
 
 def _select_thread(threads_path: Path) -> str:
@@ -731,6 +751,16 @@ def _commit_staged(thread_path: Path, response: str) -> None:
             path.chmod(0o444)
 
     _write_read_only(turn_path / RESPONSE_PATHNAME, response)
+
+
+def _assert_thread_exists(path: Path) -> None:
+    if not path.exists():
+        sys.exit("Thread does not exist.")
+
+
+def _assert_thread_doesnt_exist(path: Path) -> None:
+    if path.exists():
+        sys.exit("Thread already exists.")
 
 
 if __name__ == "__main__":
