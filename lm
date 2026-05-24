@@ -115,17 +115,17 @@ def main() -> None:
         help="Destination thread name.",
     )
 
-    stage_parser = subparsers.add_parser(
-        "stage",
-        help="Stage a prompt for the query.",
+    edit_prompt_parser = subparsers.add_parser(
+        "edit-prompt",
+        help="Edit prompt for the staged query.",
     )
-    stage_parser.set_defaults(func=_cmd_stage)
-    stage_parser.add_argument(
+    edit_prompt_parser.set_defaults(func=_cmd_edit_prompt)
+    edit_prompt_parser.add_argument(
         "-p",
         "--preset",
         help="prompt name (maps to ~/.config/lm/presets/<name>.md)",
     )
-    _add_thread_args(stage_parser, required=True)
+    _add_thread_args(edit_prompt_parser, required=True)
 
     commit_parser = subparsers.add_parser(
         "commit",
@@ -247,7 +247,7 @@ def _cmd_mv(args: argparse.Namespace) -> None:
     src_path.rename(dst_path)
 
 
-def _cmd_stage(args: argparse.Namespace) -> None:
+def _cmd_edit_prompt(args: argparse.Namespace) -> None:
     config_path = _get_config_path(missing_ok=False)
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
