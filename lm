@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """CLI tool for interacting with Claude from the terminal."""
 
+from __future__ import annotations
+
 import argparse
 import datetime
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 import tomllib
+import uuid
 from itertools import count
 from pathlib import Path
-from typing import IO
+from typing import IO, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 LM_DATA_DIR_ENV = "LM_DATA_DIR"
 
@@ -24,7 +31,7 @@ CLAUDE_EMPTY_CWD_DIRNAME = ".claude-empty-cwd"
 
 TURN_IDX_ZEROPAD = 2
 MODEL_PATHNAME = ".model"
-SESSION_PATHNAME = ".session"
+CLAUDE_SESSION_PATHNAME = ".claude-session.jsonl"
 EDITMSG_PATHNAME = ".EDITMSG.md"
 TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE = ".{timestamp}-EDITMSG.md"
 STAGED_PATHNAME = "STAGED"
@@ -201,11 +208,11 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
     response = _execute_turn(
         model=(thread_path / MODEL_PATHNAME).read_text(),
-        session_path=thread_path / SESSION_PATHNAME,
         prompt=prompt,
         piped_stdin=piped_stdin,
         char_delay=_get_char_delay_from_settings(config_path),
-        claude_empty_cwd_path=data_path / CLAUDE_EMPTY_CWD_DIRNAME,
+        claude_cwd_path=data_path / CLAUDE_EMPTY_CWD_DIRNAME,
+        claude_session_path=thread_path / CLAUDE_SESSION_PATHNAME,
     )
 
     _commit_staged(thread_path, response)
@@ -294,11 +301,11 @@ def _cmd_commit(args: argparse.Namespace) -> None:
 
     response = _execute_turn(
         model=(thread_path / MODEL_PATHNAME).read_text(),
-        session_path=thread_path / SESSION_PATHNAME,
         prompt=prompt,
         piped_stdin=piped_stdin,
         char_delay=_get_char_delay_from_settings(config_path),
-        claude_empty_cwd_path=data_path / CLAUDE_EMPTY_CWD_DIRNAME,
+        claude_cwd_path=data_path / CLAUDE_EMPTY_CWD_DIRNAME,
+        claude_session_path=thread_path / CLAUDE_SESSION_PATHNAME,
     )
 
     _commit_staged(thread_path, response)
@@ -533,13 +540,12 @@ def _edit_prompt(path: Path, *, history: list[tuple[str, str]], draft: str) -> s
 def _execute_turn(
     *,
     model: str,
-    session_path: Path,
     prompt: str,
     piped_stdin: str,
     char_delay: float,
-    claude_empty_cwd_path: Path,
+    claude_cwd_path: Path,
+    claude_session_path: Path,
 ) -> str:
-    session_id: str | None = session_path.read_text() if session_path.exists() else None
 
     prompt_summary = _compress_text(
         _flatten_text(prompt), max_length=PROMPT_SUMMARY_MAX_LENGTH
@@ -548,41 +554,36 @@ def _execute_turn(
     sys.stdout.write(f"Prompt: {prompt_summary}\nWaiting for response...")
     sys.stdout.flush()
 
-    inference_session_id, response = _run_inference(
-        model=model,
-        session_id=session_id,
-        prompt=prompt,
-        piped_stdin=piped_stdin,
-        char_delay=char_delay,
-        claude_empty_cwd_path=claude_empty_cwd_path,
-    )
-
-    if session_id is None:
-        _write_read_only(session_path, inference_session_id)
-    elif inference_session_id != session_id:
-        sys.exit(
-            f"Session ID mismatch between inference result and session file: "
-            f"{inference_session_id} != {session_id}"
+    with _ClaudeSession.create(
+        path=claude_session_path, cwd_path=claude_cwd_path
+    ) as claude_session_args:
+        return _run_inference(
+            model=model,
+            prompt=prompt,
+            piped_stdin=piped_stdin,
+            char_delay=char_delay,
+            claude_cwd_path=claude_cwd_path,
+            claude_session_args=claude_session_args,
         )
-
-    return response
 
 
 def _run_inference(
     *,
     model: str,
-    session_id: str | None,
     prompt: str,
     piped_stdin: str,
     char_delay: float,
-    claude_empty_cwd_path: Path,
-) -> tuple[str, str]:
+    claude_cwd_path: Path,
+    claude_session_args: tuple[str, str],
+) -> str:
+
     command = [
         "claude",
         prompt,
         "--model",
         model,
-        # Make it stateless
+        *claude_session_args,
+        # Simplify behavior
         "--system-prompt",
         SYSTEM_PROMPT,
         "--print",
@@ -595,9 +596,6 @@ def _run_inference(
         "--verbose",
     ]
 
-    if session_id is not None:
-        command.extend(["--resume", session_id])
-
     process = subprocess.Popen(  # noqa: S603  (command is not user-provided)
         command,
         stdin=subprocess.PIPE,
@@ -606,7 +604,7 @@ def _run_inference(
         # --bare / CLAUDE_CODE_SIMPLE disables OAuth and routes billing to API
         # Still, as long as we set CWD to a bare directory, no CLAUDE.md will be
         # picked up.
-        cwd=claude_empty_cwd_path,
+        cwd=claude_cwd_path,
     )
 
     if process.stdin is None or process.stdout is None:
@@ -614,10 +612,6 @@ def _run_inference(
 
     process.stdin.write(piped_stdin)
     process.stdin.close()
-
-    first_line = process.stdout.readline()
-    first_event = json.loads(first_line)
-    process_session_id = first_event["session_id"]
 
     # clear screen, helps keeping text stationary as it streams
     sys.stdout.write("\033[2J\033[H")
@@ -653,7 +647,7 @@ def _run_inference(
     if process.returncode != 0:
         sys.exit(process.returncode)
 
-    return process_session_id, response
+    return response
 
 
 def _get_turns_count(thread_path: Path) -> int:
@@ -761,6 +755,47 @@ def _assert_thread_exists(path: Path) -> None:
 def _assert_thread_doesnt_exist(path: Path) -> None:
     if path.exists():
         sys.exit("Thread already exists.")
+
+
+class _ClaudeSession:
+    def __init__(self, args: tuple[str, str], path: Path, expected_path: Path) -> None:
+        self._args = args
+        self._path = path
+        self._expected_path = expected_path
+
+    @staticmethod
+    def create(path: Path, cwd_path: Path) -> _ClaudeSession:
+        # Ref: https://code.claude.com/docs/en/agent-sdk/sessions
+        projects_path = Path.home() / ".claude/projects"
+        escaped_cwd = re.sub(r"[^a-zA-Z0-9]", "-", str(cwd_path.resolve()))
+        project_path = projects_path / escaped_cwd
+        id_ = str(uuid.uuid4())
+        expected_path = project_path / f"{id_}.jsonl"
+
+        projects_path.mkdir(exist_ok=True)
+        project_path.mkdir(exist_ok=True)
+
+        if not path.exists():
+            flag = "--session-id"
+        else:
+            flag = "--resume"
+            expected_path.symlink_to(path.resolve())
+
+        return _ClaudeSession((flag, id_), path, expected_path)
+
+    def __enter__(self) -> tuple[str, str]:
+        return self._args
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        if self._expected_path.is_symlink():
+            self._expected_path.unlink()
+        elif self._expected_path.exists():
+            self._expected_path.rename(self._path)
 
 
 if __name__ == "__main__":

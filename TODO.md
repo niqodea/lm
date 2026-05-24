@@ -1,5 +1,4 @@
 # Now
-- Store Claude session data inside the thread dir as the source of truth, and symlink it into Claude's expected location on resume so that Claude writes directly to the thread dir transparently.
 - Implement attachments (text, pdf, images, maybe audio?) in stage (and maybe run too?).
   Will most likely need Claude's @ directives.
 - Print cleanly to stdout (opt-in setting? leverage stderr?).
