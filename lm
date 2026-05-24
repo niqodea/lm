@@ -168,7 +168,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
     threads_path = data_path / THREADS_PATHNAME
 
     preset_name: str | None = args.preset
-    draft = _get_preset(preset_name, config_path) if preset_name is not None else ""
+    draft = None if preset_name is None else _get_preset(preset_name, config_path)
 
     if _has_thread_arg(args):
         thread_path = _get_thread_path(args, threads_path)
@@ -262,7 +262,7 @@ def _cmd_edit_prompt(args: argparse.Namespace) -> None:
 
     match staged_prompt_path.exists(), preset_name:
         case False, None:
-            draft = ""
+            draft: str | None = None
         case False, str():
             draft = _get_preset(preset_name, config_path)
         case True, None:
@@ -483,7 +483,9 @@ def _get_threads(threads_path: Path) -> list[str]:
     return [p.name for p in paths]
 
 
-def _edit_prompt(path: Path, *, history: list[tuple[str, str]], draft: str) -> str:
+def _edit_prompt(
+    path: Path, *, history: list[tuple[str, str]], draft: str | None
+) -> str:
     editor = os.getenv("EDITOR", "vim")
 
     prompt_is_last = editor in PROMPT_IS_LAST_EDITORS
@@ -509,7 +511,11 @@ def _edit_prompt(path: Path, *, history: list[tuple[str, str]], draft: str) -> s
     if components:
         components.append(scissors_line_component)
 
-    components.append(draft)
+    if draft is not None:
+        components.append(draft)
+    else:
+        # drafts come with trailing newline, add it to empty string for consistency
+        components.append("\n")
 
     if not prompt_is_last:
         components.reverse()
