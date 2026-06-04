@@ -27,14 +27,16 @@ SETTINGS_PATHNAME = "settings.toml"
 PRESETS_PATHNAME = "presets"
 
 THREADS_PATHNAME = "threads"
-CLAUDE_EMPTY_CWD_DIRNAME = ".claude-empty-cwd"
+CLAUDE_EMPTY_CWD_PATHNAME = ".claude-empty-cwd"
 
 TURN_IDX_ZEROPAD = 2
-MODEL_PATHNAME = ".model"
-CLAUDE_SESSION_PATHNAME = ".claude-session.jsonl"
 EDITMSG_PATHNAME = ".EDITMSG.md"
 TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE = ".{timestamp}-EDITMSG.md"
 STAGED_PATHNAME = "STAGED"
+
+CLAUDE_PATHNAME = ".claude"
+MODEL_PATHNAME = "model"
+SESSION_PATHNAME = "session.jsonl"
 
 PROMPT_PATHNAME = "prompt.md"
 RESPONSE_PATHNAME = "response.md"
@@ -159,7 +161,7 @@ def _cmd_init(_: argparse.Namespace) -> None:
     if not data_path.exists():
         data_path.mkdir()
         (data_path / THREADS_PATHNAME).mkdir()
-        (data_path / CLAUDE_EMPTY_CWD_DIRNAME).mkdir()
+        (data_path / CLAUDE_EMPTY_CWD_PATHNAME).mkdir()
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
@@ -193,7 +195,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
         sys.stdout.write(f"Creating new thread: {thread_timestamp}\n")
         thread_path = threads_path / thread_timestamp
         thread_path.mkdir()
-        _write_read_only(thread_path / MODEL_PATHNAME, DEFAULT_MODEL)
+        (thread_path / CLAUDE_PATHNAME).mkdir()
+        _write_read_only(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME, DEFAULT_MODEL)
 
     staged_path = thread_path / STAGED_PATHNAME
     staged_path.mkdir()
@@ -207,12 +210,12 @@ def _cmd_run(args: argparse.Namespace) -> None:
         (staged_path / STDIN_PATHNAME).write_text(piped_stdin)
 
     response = _execute_turn(
-        model=(thread_path / MODEL_PATHNAME).read_text(),
+        model=(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME).read_text(),
         prompt=prompt,
         piped_stdin=piped_stdin,
         char_delay=_get_char_delay_from_settings(config_path),
-        claude_cwd_path=data_path / CLAUDE_EMPTY_CWD_DIRNAME,
-        claude_session_path=thread_path / CLAUDE_SESSION_PATHNAME,
+        claude_cwd_path=data_path / CLAUDE_EMPTY_CWD_PATHNAME,
+        claude_session_path=(thread_path / CLAUDE_PATHNAME / SESSION_PATHNAME),
     )
 
     _commit_staged(thread_path, response)
@@ -229,9 +232,11 @@ def _cmd_new(args: argparse.Namespace) -> None:
     _assert_thread_doesnt_exist(path)
     path.mkdir()
 
+    claude_path = path / CLAUDE_PATHNAME
+    claude_path.mkdir()
+
     # We tie the thread to a single model for simplicity
-    model_path = path / MODEL_PATHNAME
-    _write_read_only(model_path, model)
+    _write_read_only(claude_path / MODEL_PATHNAME, model)
 
 
 def _cmd_mv(args: argparse.Namespace) -> None:
@@ -300,12 +305,12 @@ def _cmd_commit(args: argparse.Namespace) -> None:
     piped_stdin = staged_stdin_path.read_text() if staged_stdin_path.exists() else ""
 
     response = _execute_turn(
-        model=(thread_path / MODEL_PATHNAME).read_text(),
+        model=(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME).read_text(),
         prompt=prompt,
         piped_stdin=piped_stdin,
         char_delay=_get_char_delay_from_settings(config_path),
-        claude_cwd_path=data_path / CLAUDE_EMPTY_CWD_DIRNAME,
-        claude_session_path=thread_path / CLAUDE_SESSION_PATHNAME,
+        claude_cwd_path=data_path / CLAUDE_EMPTY_CWD_PATHNAME,
+        claude_session_path=thread_path / CLAUDE_PATHNAME / SESSION_PATHNAME,
     )
 
     _commit_staged(thread_path, response)
