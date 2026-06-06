@@ -83,12 +83,12 @@ def main() -> None:
         help="Run inference on a prompt.",
     )
     run_parser.set_defaults(func=_cmd_run)
+    _add_thread_args(run_parser, required=False)
     run_parser.add_argument(
         "-p",
         "--preset",
         help="Preset name (maps to ~/.config/lm/presets/<name>.md)",
     )
-    _add_thread_args(run_parser, required=False)
 
     new_parser = subparsers.add_parser(
         "new",
@@ -134,12 +134,12 @@ def main() -> None:
         help="Edit prompt for the staged query.",
     )
     edit_prompt_parser.set_defaults(func=_cmd_edit_prompt)
+    _add_thread_args(edit_prompt_parser, required=True)
     edit_prompt_parser.add_argument(
         "-p",
         "--preset",
         help="prompt name (maps to ~/.config/lm/presets/<name>.md)",
     )
-    _add_thread_args(edit_prompt_parser, required=True)
 
     commit_parser = subparsers.add_parser(
         "commit",
