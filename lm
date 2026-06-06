@@ -27,7 +27,6 @@ SETTINGS_PATHNAME = "settings.toml"
 PRESETS_PATHNAME = "presets"
 
 THREADS_PATHNAME = "threads"
-CLAUDE_EMPTY_CWD_PATHNAME = ".claude-empty-cwd"
 
 TURN_IDX_ZEROPAD = 2
 EDITMSG_PATHNAME = ".EDITMSG.md"
@@ -35,6 +34,7 @@ TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE = ".{timestamp}-EDITMSG.md"
 STAGED_PATHNAME = "STAGED"
 
 CLAUDE_PATHNAME = ".claude"
+SCRATCH_CWD_PATHNAME = "scratch-cwd"
 MODEL_PATHNAME = "model"
 SESSION_PATHNAME = "session.jsonl"
 TOOLS_PATHNAME = "tools"
@@ -89,6 +89,14 @@ def main() -> None:
         "--preset",
         help="Preset name (maps to ~/.config/lm/presets/<name>.md)",
     )
+    run_parser.add_argument(
+        "-a",
+        "--attach",
+        dest="attachments",
+        action="append",
+        default=[],
+        help="File to attach and make available to the model (repeatable). ",
+    )
 
     new_parser = subparsers.add_parser(
         "new",
@@ -141,6 +149,19 @@ def main() -> None:
         help="prompt name (maps to ~/.config/lm/presets/<name>.md)",
     )
 
+    attach_parser = subparsers.add_parser(
+        "attach",
+        help="Add attachments for the staged query.",
+    )
+    attach_parser.set_defaults(func=_cmd_attach)
+    _add_thread_args(attach_parser, required=True)
+    attach_parser.add_argument(
+        "attachments",
+        nargs="+",
+        metavar="FILE[:ALIAS]",
+        help="File to attach (repeatable). ",
+    )
+
     commit_parser = subparsers.add_parser(
         "commit",
         help="Run inference on the staged query.",
@@ -173,7 +194,6 @@ def _cmd_init(_: argparse.Namespace) -> None:
     if not data_path.exists():
         data_path.mkdir()
         (data_path / THREADS_PATHNAME).mkdir()
-        (data_path / CLAUDE_EMPTY_CWD_PATHNAME).mkdir()
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
@@ -183,6 +203,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
     preset_name: str | None = args.preset
     draft = None if preset_name is None else _get_preset(preset_name, config_path)
+    attachments = [_get_attachment(a) for a in args.attachments]
 
     if _has_thread_arg(args):
         thread_path = _get_thread_path(args, threads_path)
@@ -208,6 +229,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
         thread_path = threads_path / thread_timestamp
         thread_path.mkdir()
         (thread_path / CLAUDE_PATHNAME).mkdir()
+        (thread_path / CLAUDE_PATHNAME / SCRATCH_CWD_PATHNAME).mkdir()
         _write_read_only(
             thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME, DEFAULT_CLAUDE_MODEL
         )
@@ -224,12 +246,20 @@ def _cmd_run(args: argparse.Namespace) -> None:
         piped_stdin = sys.stdin.read()
         (staged_path / STDIN_PATHNAME).write_text(piped_stdin)
 
+    if not attachments:
+        attachments_path = None
+    else:
+        attachments_path = staged_path / ATTACHMENTS_PATHNAME
+        attachments_path.mkdir()
+        _write_attachments(attachments, attachments_path)
+
     response = _execute_turn(
         prompt=prompt,
         piped_stdin=piped_stdin,
+        attachments_path=attachments_path,
         claude_model=(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME).read_text(),
         claude_tools=(thread_path / CLAUDE_PATHNAME / TOOLS_PATHNAME).read_text(),
-        claude_cwd_path=data_path / CLAUDE_EMPTY_CWD_PATHNAME,
+        claude_scratch_cwd_path=thread_path / CLAUDE_PATHNAME / SCRATCH_CWD_PATHNAME,
         claude_session_path=(thread_path / CLAUDE_PATHNAME / SESSION_PATHNAME),
         char_delay=_get_char_delay_from_settings(config_path),
     )
@@ -252,6 +282,7 @@ def _cmd_new(args: argparse.Namespace) -> None:
     claude_path = path / CLAUDE_PATHNAME
     claude_path.mkdir()
 
+    (claude_path / SCRATCH_CWD_PATHNAME).mkdir()
     # We tie these to the thread for simplicity and not to bust cache
     _write_read_only(claude_path / MODEL_PATHNAME, claude_model)
     claude_tools = _resolve_claude_tools(capabilities)
@@ -301,6 +332,21 @@ def _cmd_edit_prompt(args: argparse.Namespace) -> None:
     staged_prompt_path.write_text(f"{prompt}\n")
 
 
+def _cmd_attach(args: argparse.Namespace) -> None:
+    data_path = _get_data_path(missing_ok=False)
+    threads_path = data_path / THREADS_PATHNAME
+
+    thread_path = _get_thread_path(args, threads_path)
+    attachments = [_get_attachment(a) for a in args.attachments]
+
+    staged_path = thread_path / STAGED_PATHNAME
+    staged_path.mkdir(exist_ok=True)
+
+    attachments_path = staged_path / ATTACHMENTS_PATHNAME
+    attachments_path.mkdir(exist_ok=True)
+    _write_attachments(attachments, attachments_path)
+
+
 def _cmd_commit(args: argparse.Namespace) -> None:
     config_path = _get_config_path(missing_ok=False)
     data_path = _get_data_path(missing_ok=False)
@@ -323,12 +369,15 @@ def _cmd_commit(args: argparse.Namespace) -> None:
     staged_stdin_path = staged_path / STDIN_PATHNAME
     piped_stdin = staged_stdin_path.read_text() if staged_stdin_path.exists() else ""
 
+    attachments_path = staged_path / ATTACHMENTS_PATHNAME
+
     response = _execute_turn(
         prompt=prompt,
         piped_stdin=piped_stdin,
+        attachments_path=attachments_path if attachments_path.exists() else None,
         claude_model=(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME).read_text(),
         claude_tools=(thread_path / CLAUDE_PATHNAME / TOOLS_PATHNAME).read_text(),
-        claude_cwd_path=data_path / CLAUDE_EMPTY_CWD_PATHNAME,
+        claude_scratch_cwd_path=thread_path / CLAUDE_PATHNAME / SCRATCH_CWD_PATHNAME,
         claude_session_path=thread_path / CLAUDE_PATHNAME / SESSION_PATHNAME,
         char_delay=_get_char_delay_from_settings(config_path),
     )
@@ -349,6 +398,12 @@ def _cmd_clear(args: argparse.Namespace) -> None:
 
     staged_prompt_path = staged_path / PROMPT_PATHNAME
     staged_prompt_path.unlink(missing_ok=True)
+
+    staged_attachments_path = staged_path / ATTACHMENTS_PATHNAME
+    if staged_attachments_path.exists():
+        for path in staged_attachments_path.iterdir():
+            path.unlink(missing_ok=True)
+        staged_attachments_path.rmdir()
 
     staged_path.rmdir()
 
@@ -572,9 +627,10 @@ def _execute_turn(
     *,
     prompt: str,
     piped_stdin: str,
+    attachments_path: Path | None,
     claude_model: str,
     claude_tools: str,
-    claude_cwd_path: Path,
+    claude_scratch_cwd_path: Path,
     claude_session_path: Path,
     char_delay: float,
 ) -> str:
@@ -586,15 +642,21 @@ def _execute_turn(
     sys.stdout.write(f"Prompt: {prompt_summary}\nWaiting for response...")
     sys.stdout.flush()
 
-    with _ClaudeSession.create(
-        path=claude_session_path, cwd_path=claude_cwd_path
-    ) as claude_session_args:
+    with (
+        _ClaudeContext.create(
+            session_path=claude_session_path,
+            scratch_cwd_path=claude_scratch_cwd_path,
+            attachments_path=attachments_path,
+        ) as (claude_session_args, claude_attachments_prompt),
+    ):
         return _run_inference(
-            prompt=prompt,
-            piped_stdin=piped_stdin,
+            claude_prompt=f"{prompt}\n\n{claude_attachments_prompt}"
+            if claude_attachments_prompt
+            else prompt,
+            claude_stdin=piped_stdin,
             claude_model=claude_model,
             claude_tools=claude_tools,
-            claude_cwd_path=claude_cwd_path,
+            claude_scratch_cwd_path=claude_scratch_cwd_path,
             claude_session_args=claude_session_args,
             char_delay=char_delay,
         )
@@ -602,18 +664,18 @@ def _execute_turn(
 
 def _run_inference(
     *,
-    prompt: str,
-    piped_stdin: str,
+    claude_prompt: str,
+    claude_stdin: str,
     claude_model: str,
     claude_tools: str,
-    claude_cwd_path: Path,
+    claude_scratch_cwd_path: Path,
     claude_session_args: tuple[str, str],
     char_delay: float,
 ) -> str:
 
     command = [
         "claude",
-        prompt,
+        claude_prompt,
         "--model",
         claude_model,
         *claude_session_args,
@@ -642,13 +704,13 @@ def _run_inference(
         # --bare / CLAUDE_CODE_SIMPLE disables OAuth and routes billing to API
         # Still, as long as we set CWD to a bare directory, no CLAUDE.md will be
         # picked up.
-        cwd=claude_cwd_path,
+        cwd=claude_scratch_cwd_path,
     )
 
     if process.stdin is None or process.stdout is None:
         sys.exit("Unexpected error: Claude standard streams not captured")
 
-    process.stdin.write(piped_stdin)
+    process.stdin.write(claude_stdin)
     process.stdin.close()
 
     # clear screen, helps keeping text stationary as it streams
@@ -702,6 +764,26 @@ def _get_preset(name: str, config_path: Path) -> str:
     if not path.exists():
         sys.exit(f"Preset not found: {path}")
     return path.read_text()
+
+
+def _get_attachment(arg: str) -> tuple[Path, str]:
+    if ":" not in arg:
+        path = Path(arg)
+        alias = path.name
+    else:
+        path_str, alias = arg.split(":")
+        path = Path(path_str)
+    if not path.exists():
+        sys.exit(f"Attachment not found: {path}")
+    return path, alias
+
+
+def _write_attachments(attachments: list[tuple[Path, str]], path: Path) -> None:
+    for source_path, alias in attachments:
+        alias_path = path / alias
+        if alias_path.exists():
+            sys.exit(f"Attachment already exists with alias '{alias}'")
+        alias_path.hardlink_to(source_path)
 
 
 def _compress_text(value: str, max_length: int) -> str:
@@ -799,34 +881,57 @@ def _resolve_claude_tools(capabilities: list[str]) -> str:
     return ",".join(t for c in capabilities for t in CAPABILITY_CLAUDE_TOOLS[c])
 
 
-class _ClaudeSession:
-    def __init__(self, args: tuple[str, str], path: Path, expected_path: Path) -> None:
-        self._args = args
-        self._path = path
-        self._expected_path = expected_path
+class _ClaudeContext:
+    def __init__(
+        self,
+        session_id: str,
+        session_path: Path,
+        session_expected_path: Path,
+        scratch_cwd_path: Path,
+        attachments_path: Path | None,
+    ) -> None:
+        self._session_id = session_id
+        self._session_path = session_path
+        self._session_expected_path = session_expected_path
+        self._scratch_cwd_path = scratch_cwd_path
+        self._attachments_path = attachments_path
 
     @staticmethod
-    def create(path: Path, cwd_path: Path) -> _ClaudeSession:
+    def create(
+        *, session_path: Path, scratch_cwd_path: Path, attachments_path: Path | None
+    ) -> _ClaudeContext:
         # Ref: https://code.claude.com/docs/en/agent-sdk/sessions
         projects_path = Path.home() / ".claude/projects"
-        escaped_cwd = re.sub(r"[^a-zA-Z0-9]", "-", str(cwd_path.resolve()))
+        escaped_cwd = re.sub(r"[^a-zA-Z0-9]", "-", str(scratch_cwd_path.resolve()))
         project_path = projects_path / escaped_cwd
         id_ = str(uuid.uuid4())
-        expected_path = project_path / f"{id_}.jsonl"
+        session_expected_path = project_path / f"{id_}.jsonl"
+        return _ClaudeContext(
+            id_, session_path, session_expected_path, scratch_cwd_path, attachments_path
+        )
 
-        projects_path.mkdir(exist_ok=True)
-        project_path.mkdir(exist_ok=True)
-
-        if not path.exists():
+    def __enter__(self) -> tuple[tuple[str, str], str | None]:
+        if not self._session_path.exists():
             flag = "--session-id"
         else:
             flag = "--resume"
-            expected_path.symlink_to(path.resolve())
+            self._session_expected_path.symlink_to(self._session_path.resolve())
 
-        return _ClaudeSession((flag, id_), path, expected_path)
+        if self._attachments_path is None:
+            attachments_prompt = None
+        else:
+            attachments_prompt_lines = ["Attached files:"]
+            for src in self._attachments_path.iterdir():
+                dst = self._scratch_cwd_path / src.name
+                dst.symlink_to(
+                    src.resolve().relative_to(
+                        self._scratch_cwd_path.resolve(), walk_up=True
+                    )
+                )
+                attachments_prompt_lines.append(f"- @{dst.name}")
+            attachments_prompt = "\n".join(attachments_prompt_lines)
 
-    def __enter__(self) -> tuple[str, str]:
-        return self._args
+        return (flag, self._session_id), attachments_prompt
 
     def __exit__(
         self,
@@ -834,10 +939,13 @@ class _ClaudeSession:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if self._expected_path.is_symlink():
-            self._expected_path.unlink()
-        elif self._expected_path.exists():
-            self._expected_path.rename(self._path)
+        if self._session_expected_path.is_symlink():
+            self._session_expected_path.unlink()
+        elif self._session_expected_path.exists():
+            self._session_expected_path.rename(self._session_path)
+
+        for path in self._scratch_cwd_path.iterdir():
+            path.unlink()
 
 
 if __name__ == "__main__":

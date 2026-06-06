@@ -1,6 +1,7 @@
 # Now
-- Implement attachments (text, pdf, images, maybe audio?) in stage (and maybe run too?).
-  Will most likely need Claude's @ directives.
+- Address large PNG attachments causing Claude to not read the content.
+    Perhaps shrink the image locally before sending?
+- Address weird permission issues arising for files passed as attachments.
 - Print cleanly to stdout (opt-in setting? leverage stderr?).
 - Implement a chat command to loop back to editor once response is streamed.
 - Address long names in `lm ls` / `--select`
