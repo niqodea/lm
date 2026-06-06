@@ -57,13 +57,13 @@ LS_NAME_LENGTH = 15
 LS_PROMPT_LENGTH = 30
 LS_RESPONSE_LENGTH = 50
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 
 PROMPT_IS_LAST_EDITORS = {"vi", "vim", "nvim"}
 
 SETTINGS_CHAR_DELAY_KEY = "char_delay"
 
-CAPABILITY_TOOLS = {"web": ("WebFetch", "WebSearch")}
+CAPABILITY_CLAUDE_TOOLS = {"web": ("WebFetch", "WebSearch")}
 
 
 def main() -> None:
@@ -101,9 +101,9 @@ def main() -> None:
     )
     new_parser.add_argument(
         "-m",
-        "--model",
-        help="Model to use for this thread.",
-        default=DEFAULT_MODEL,
+        "--claude-model",
+        help="Claude model to use for this thread.",
+        default=DEFAULT_CLAUDE_MODEL,
     )
     new_parser.add_argument(
         "-w",
@@ -111,7 +111,7 @@ def main() -> None:
         dest="capabilities",
         action="append",
         default=[],
-        choices=list(CAPABILITY_TOOLS),
+        choices=list(CAPABILITY_CLAUDE_TOOLS),
         help="Capabilities to enable for this thread (repeatable).",
     )
 
@@ -208,7 +208,9 @@ def _cmd_run(args: argparse.Namespace) -> None:
         thread_path = threads_path / thread_timestamp
         thread_path.mkdir()
         (thread_path / CLAUDE_PATHNAME).mkdir()
-        _write_read_only(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME, DEFAULT_MODEL)
+        _write_read_only(
+            thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME, DEFAULT_CLAUDE_MODEL
+        )
         _write_read_only(thread_path / CLAUDE_PATHNAME / TOOLS_PATHNAME, "")
 
     staged_path = thread_path / STAGED_PATHNAME
@@ -223,13 +225,13 @@ def _cmd_run(args: argparse.Namespace) -> None:
         (staged_path / STDIN_PATHNAME).write_text(piped_stdin)
 
     response = _execute_turn(
-        model=(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME).read_text(),
-        tools=(thread_path / CLAUDE_PATHNAME / TOOLS_PATHNAME).read_text(),
         prompt=prompt,
         piped_stdin=piped_stdin,
-        char_delay=_get_char_delay_from_settings(config_path),
+        claude_model=(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME).read_text(),
+        claude_tools=(thread_path / CLAUDE_PATHNAME / TOOLS_PATHNAME).read_text(),
         claude_cwd_path=data_path / CLAUDE_EMPTY_CWD_PATHNAME,
         claude_session_path=(thread_path / CLAUDE_PATHNAME / SESSION_PATHNAME),
+        char_delay=_get_char_delay_from_settings(config_path),
     )
 
     _commit_staged(thread_path, response)
@@ -240,8 +242,8 @@ def _cmd_new(args: argparse.Namespace) -> None:
     threads_path = data_path / THREADS_PATHNAME
 
     name: str = args.name
-    model: str = args.model
     capabilities: list[str] = args.capabilities
+    claude_model: str = args.claude_model
 
     path = threads_path / name
     _assert_thread_doesnt_exist(path)
@@ -251,9 +253,9 @@ def _cmd_new(args: argparse.Namespace) -> None:
     claude_path.mkdir()
 
     # We tie these to the thread for simplicity and not to bust cache
-    _write_read_only(claude_path / MODEL_PATHNAME, model)
-    tools = _resolve_tools(capabilities)
-    _write_read_only(claude_path / TOOLS_PATHNAME, tools)
+    _write_read_only(claude_path / MODEL_PATHNAME, claude_model)
+    claude_tools = _resolve_claude_tools(capabilities)
+    _write_read_only(claude_path / TOOLS_PATHNAME, claude_tools)
 
 
 def _cmd_mv(args: argparse.Namespace) -> None:
@@ -322,13 +324,13 @@ def _cmd_commit(args: argparse.Namespace) -> None:
     piped_stdin = staged_stdin_path.read_text() if staged_stdin_path.exists() else ""
 
     response = _execute_turn(
-        model=(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME).read_text(),
-        tools=(thread_path / CLAUDE_PATHNAME / TOOLS_PATHNAME).read_text(),
         prompt=prompt,
         piped_stdin=piped_stdin,
-        char_delay=_get_char_delay_from_settings(config_path),
+        claude_model=(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME).read_text(),
+        claude_tools=(thread_path / CLAUDE_PATHNAME / TOOLS_PATHNAME).read_text(),
         claude_cwd_path=data_path / CLAUDE_EMPTY_CWD_PATHNAME,
         claude_session_path=thread_path / CLAUDE_PATHNAME / SESSION_PATHNAME,
+        char_delay=_get_char_delay_from_settings(config_path),
     )
 
     _commit_staged(thread_path, response)
@@ -568,13 +570,13 @@ def _edit_prompt(
 
 def _execute_turn(
     *,
-    model: str,
-    tools: str,
     prompt: str,
     piped_stdin: str,
-    char_delay: float,
+    claude_model: str,
+    claude_tools: str,
     claude_cwd_path: Path,
     claude_session_path: Path,
+    char_delay: float,
 ) -> str:
 
     prompt_summary = _compress_text(
@@ -588,32 +590,32 @@ def _execute_turn(
         path=claude_session_path, cwd_path=claude_cwd_path
     ) as claude_session_args:
         return _run_inference(
-            model=model,
-            tools=tools,
             prompt=prompt,
             piped_stdin=piped_stdin,
-            char_delay=char_delay,
+            claude_model=claude_model,
+            claude_tools=claude_tools,
             claude_cwd_path=claude_cwd_path,
             claude_session_args=claude_session_args,
+            char_delay=char_delay,
         )
 
 
 def _run_inference(
     *,
-    model: str,
-    tools: str,
     prompt: str,
     piped_stdin: str,
-    char_delay: float,
+    claude_model: str,
+    claude_tools: str,
     claude_cwd_path: Path,
     claude_session_args: tuple[str, str],
+    char_delay: float,
 ) -> str:
 
     command = [
         "claude",
         prompt,
         "--model",
-        model,
+        claude_model,
         *claude_session_args,
         # Simplify behavior
         "--system-prompt",
@@ -621,10 +623,10 @@ def _run_inference(
         "--print",
         # Restrict tool context
         "--tools",
-        tools,
+        claude_tools,
         # Pre-approve to avoid permission errors in print mode
         "--allowed-tools",
-        tools,
+        claude_tools,
         # To stream response text
         "--include-partial-messages",
         "--output-format",
@@ -793,9 +795,8 @@ def _assert_thread_doesnt_exist(path: Path) -> None:
         sys.exit("Thread already exists.")
 
 
-def _resolve_tools(capabilities: list[str]) -> str:
-    tools = [t for c in capabilities for t in CAPABILITY_TOOLS[c]]
-    return ",".join(tools)
+def _resolve_claude_tools(capabilities: list[str]) -> str:
+    return ",".join(t for c in capabilities for t in CAPABILITY_CLAUDE_TOOLS[c])
 
 
 class _ClaudeSession:
