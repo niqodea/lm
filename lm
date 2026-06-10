@@ -400,6 +400,9 @@ def _cmd_clear(args: argparse.Namespace) -> None:
     staged_prompt_path = staged_path / PROMPT_PATHNAME
     staged_prompt_path.unlink(missing_ok=True)
 
+    staged_stdin_path = staged_path / STDIN_PATHNAME
+    staged_stdin_path.unlink(missing_ok=True)
+
     staged_attachments_path = staged_path / ATTACHMENTS_PATHNAME
     if staged_attachments_path.exists():
         for path in staged_attachments_path.iterdir():
