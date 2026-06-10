@@ -59,6 +59,7 @@ LS_RESPONSE_LENGTH = 50
 
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 
+INSERT_MODE_EDITORS = {"vim", "nvim"}
 PROMPT_IS_LAST_EDITORS = {"vi", "vim", "nvim"}
 
 SETTINGS_CHAR_DELAY_KEY = "char_delay"
@@ -568,20 +569,25 @@ def _edit_prompt(
 ) -> str:
     editor = os.getenv("EDITOR", "vim")
 
+    editor_command = [editor]
+
     prompt_is_last = editor in PROMPT_IS_LAST_EDITORS
 
     if prompt_is_last:
-        command = [editor, "+", str(path)]
+        editor_command.append("+$")
         scissors_line_component = (
             "<!-- Everything above this scissors line will be ignored. -->\n"
             f"{SCISSORS_LINE}\n"
         )
     else:
-        command = [editor, str(path)]
         scissors_line_component = (
             f"{SCISSORS_LINE}\n"
             "<!-- Everything below this scissors line will be ignored. -->\n"
         )
+
+    if editor in INSERT_MODE_EDITORS and draft is None:
+        # Immediately open in insert mode, pressing 'i' adds real friction!
+        editor_command.append("+startinsert")
 
     components: list[str] = []
     for turn_idx, (turn_prompt, turn_response) in enumerate(history):
@@ -604,7 +610,7 @@ def _edit_prompt(
 
     with Path("/dev/tty").open() as tty:  # in case stdin is being piped
         subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
-            command,
+            [*editor_command, str(path)],
             stdin=tty,
             stdout=sys.stdout,
             stderr=sys.stderr,
