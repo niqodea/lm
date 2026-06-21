@@ -1,0 +1,63 @@
+#!/bin/sh
+
+set -eu
+
+usage="Usage: $(basename "$0") [-f image_format] [-p preview_time] [-e exposure_time] output_path"
+
+# Default option values
+image_format=''
+preview_time=''  
+exposure_time='1.5'
+while getopts "f:e:p:" opt; do
+    case "$opt" in
+        f) image_format="$OPTARG";;
+        p) preview_time="$OPTARG";;
+        e) exposure_time="$OPTARG";;
+        *) >&2 echo "$usage"; exit 1;;
+    esac
+done
+shift "$((OPTIND-1))"  # positional arguments follow options
+
+if [ "$#" != 1 ]; then
+    >&2 echo "$usage"
+    exit 1
+fi
+
+output_path="$1"
+
+if [ "$output_path" = '-' ]; then
+    ffmpeg_fmt="${image_format:-mjpeg}"
+else
+    ffmpeg_fmt="$image_format"
+fi
+
+if [ -n "$preview_time" ]; then
+    ffplay \
+      -video_size '1920x1080' \
+      -framerate 30 \
+      -f 'avfoundation' \
+      -i 0 \
+      -alwaysontop \
+      &
+
+    sleep "$preview_time"
+    kill -INT "$!"
+fi
+
+capture_with_ffmpeg() {
+    ffmpeg \
+      -video_size '1920x1080' \
+      -framerate 30 \
+      -f 'avfoundation' \
+      -i 0 \
+      -ss "$exposure_time" \
+      -frames:v 1 \
+      $@ \
+      "$output_path"
+}
+
+if [ -n "$ffmpeg_fmt" ]; then
+    capture_with_ffmpeg -f "$ffmpeg_fmt"
+else
+    capture_with_ffmpeg
+fi
