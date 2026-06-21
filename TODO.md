@@ -7,6 +7,7 @@
 - Address long names in `lm ls` / `--select`
 
 # Later
+- Implement different types of backend, not just Claude.
 - Maybe set capabilities both per-turn and per-thread without cache-busting via `--allowed-tools`.
   Note that having `--tools` that are not allowed might be confusing to Claude in `--print` mode.
 - Explore Claude's @ directives in depth and how to make the most of them.
