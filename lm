@@ -728,6 +728,11 @@ def _run_inference(
     for line in process.stdout:
         event = json.loads(line)
 
+        if event.get("is_error") is True:
+            sys.stderr.write(json.dumps(event) + "\n")
+            sys.stderr.flush()
+            continue
+
         if event["type"] != "stream_event":
             continue
         if event["event"]["type"] != "content_block_delta":
