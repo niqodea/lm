@@ -3,7 +3,6 @@
     Perhaps shrink the image locally before sending?
 - Address weird permission issues arising for files passed as attachments.
 - Print cleanly to stdout (opt-in setting? leverage stderr?).
-- Address long names in `lm ls` / `--select`
 
 # Later
 - Implement different types of backend, not just Claude.
