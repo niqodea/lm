@@ -661,8 +661,8 @@ def _edit_prompt(
 
     components: list[str] = []
     for turn_idx, (turn_prompt, turn_response) in enumerate(history):
-        components.append(f"<!-- Prompt {turn_idx} -->\n\n{turn_prompt}")
-        components.append(f"<!-- Answer {turn_idx} -->\n\n{turn_response}")
+        components.append(f"<!-- Prompt {turn_idx + 1} -->\n\n{turn_prompt}")
+        components.append(f"<!-- Answer {turn_idx + 1} -->\n\n{turn_response}")
 
     if components:
         components.append(scissors_line_component)
