@@ -505,7 +505,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         _commit_staged(thread_path, response)
 
         # Update mutable variables for next iteration
-        history.append((prompt, response))
+        history.append((prompt, [], response))
         prompt = _edit_prompt(editmsg_path, history=history, draft=None)
 
 
@@ -635,7 +635,7 @@ def _get_threads(threads_path: Path) -> list[str]:
 
 
 def _edit_prompt(
-    path: Path, *, history: list[tuple[str, str]], draft: str | None
+    path: Path, *, history: list[tuple[str, list[str], str]], draft: str | None
 ) -> str:
     editor = os.getenv("EDITOR", "vim")
 
@@ -660,9 +660,15 @@ def _edit_prompt(
         editor_command.append("+startinsert")
 
     components: list[str] = []
-    for turn_idx, (turn_prompt, turn_response) in enumerate(history):
-        components.append(f"<!-- Prompt {turn_idx + 1} -->\n\n{turn_prompt}")
-        components.append(f"<!-- Answer {turn_idx + 1} -->\n\n{turn_response}")
+    for turn_idx, (turn_prompt, turn_attachments, turn_response) in enumerate(history):
+        prompt_component = f"<!-- Prompt {turn_idx + 1} -->\n\n{turn_prompt}"
+        if len(turn_attachments) > 0:
+            attachments_section = f"\nAttachments: {', '.join(turn_attachments)}"
+            prompt_component += attachments_section
+        response_component = f"<!-- Answer {turn_idx + 1} -->\n\n{turn_response}"
+
+        components.append(prompt_component)
+        components.append(response_component)
 
     if components:
         components.append(scissors_line_component)
@@ -884,15 +890,20 @@ def _flatten_text(value: str) -> str:
     return " ".join(value.split())
 
 
-def _build_history(thread_path: Path) -> list[tuple[str, str]]:
-    entries: list[tuple[str, str]] = []
+def _build_history(thread_path: Path) -> list[tuple[str, list[str], str]]:
+    entries: list[tuple[str, list[str], str]] = []
     for idx in range(_get_turns_count(thread_path)):
         turn_path = thread_path / f"{idx:0{TURN_IDX_ZEROPAD}d}"
         prompt_path = turn_path / PROMPT_PATHNAME
         response_path = turn_path / RESPONSE_PATHNAME
         prompt = prompt_path.read_text()
+        attachments_path = turn_path / ATTACHMENTS_PATHNAME
+        if attachments_path.exists():
+            attachments = [p.name for p in attachments_path.iterdir()]
+        else:
+            attachments = []
         response = response_path.read_text()
-        entries.append((prompt, response))
+        entries.append((prompt, attachments, response))
     return entries
 
 
