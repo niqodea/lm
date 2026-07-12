@@ -232,7 +232,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
         editmsg_path = threads_path / editmsg_pathname
         prompt = _edit_prompt(editmsg_path, history=[], draft=draft)
 
-        sys.stdout.write(f"Creating new thread: {thread_timestamp}\n")
+        sys.stderr.write(f"Creating new thread: {thread_timestamp}\n")
         thread_path = threads_path / thread_timestamp
         thread_path.mkdir()
         (thread_path / CLAUDE_PATHNAME).mkdir()
@@ -473,7 +473,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         editmsg_path = threads_path / editmsg_pathname
         history = []
         prompt = _edit_prompt(editmsg_path, history=history, draft=None)
-        sys.stdout.write(f"Creating new thread: {thread_timestamp}\n")
+        sys.stderr.write(f"Creating new thread: {thread_timestamp}\n")
         thread_path = threads_path / thread_timestamp
         thread_path.mkdir()
         (thread_path / CLAUDE_PATHNAME).mkdir()
@@ -684,13 +684,15 @@ def _edit_prompt(
 
     path.write_text("\n\n".join(components))
 
-    with Path("/dev/tty").open() as tty:  # in case stdin is being piped
+    with Path("/dev/tty").open("r") as tty_in, Path("/dev/tty").open("w") as tty_out:
         subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
             [*editor_command, str(path)],
-            stdin=tty,
-            stdout=sys.stdout,
-            stderr=sys.stderr,
             check=True,
+            # For piping stdin
+            stdin=tty_in,
+            # For piping stdout
+            stdout=tty_out,
+            stderr=tty_out,
         )
 
     editmsg_fragments = path.read_text().split(f"\n{SCISSORS_LINE}\n")
@@ -795,9 +797,9 @@ def _run_inference(
     process.stdin.close()
 
     # clear screen, helps keeping text stationary as it streams
-    sys.stdout.write("\033[2J\033[H")
-    sys.stdout.write(f"Prompt: {prompt_summary}\nWaiting for response...\n")
-    sys.stdout.flush()
+    sys.stderr.write("\033[2J\033[H")
+    sys.stderr.write(f"Prompt: {prompt_summary}\nWaiting for response...\n")
+    sys.stderr.flush()
     buffer = io.StringIO()
     for line in process.stdout:
         event = json.loads(line)

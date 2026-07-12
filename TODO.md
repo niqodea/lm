@@ -1,6 +1,3 @@
-# Now
-- Print cleanly to stdout (opt-in setting? leverage stderr?).
-
 # Later
 - Implement different types of backend, not just Claude.
 - Maybe set capabilities both per-turn and per-thread without cache-busting via `--allowed-tools`.
