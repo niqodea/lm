@@ -66,6 +66,8 @@ SETTINGS_CHAR_DELAY_KEY = "char_delay"
 
 CAPABILITY_CLAUDE_TOOLS = {"web": ("WebFetch", "WebSearch")}
 
+ATTACHMENT_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+
 
 def main() -> None:
     """Entry point for the CLI."""
@@ -855,6 +857,10 @@ def _get_attachment(arg: str) -> tuple[Path, str]:
         path = Path(path_str)
     if not path.exists():
         sys.exit(f"Attachment not found: {path}")
+    if path.is_dir():
+        sys.exit(f"Attachment is a directory: {path}")
+    if path.stat().st_size > ATTACHMENT_MAX_SIZE_BYTES:
+        sys.exit(f"Attachment too large: {path}")
     return path, alias
 
 
@@ -863,7 +869,7 @@ def _write_attachments(attachments: list[tuple[Path, str]], path: Path) -> None:
         alias_path = path / alias
         if alias_path.exists():
             sys.exit(f"Attachment already exists with alias '{alias}'")
-        alias_path.hardlink_to(source_path)
+        alias_path.copy(source_path)
 
 
 def _compress_text(value: str, max_length: int) -> str:
