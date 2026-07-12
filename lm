@@ -798,7 +798,7 @@ def _run_inference(
 
     # clear screen, helps keeping text stationary as it streams
     sys.stderr.write("\033[2J\033[H")
-    sys.stderr.write(f"Prompt: {prompt_summary}\nWaiting for response...\n")
+    sys.stderr.write(f"Running prompt: {prompt_summary}\n\n")
     sys.stderr.flush()
     buffer = io.StringIO()
     for line in process.stdout:
