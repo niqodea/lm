@@ -1,6 +1,4 @@
 # Now
-- Address large PNG attachments causing Claude to not read the content.
-    Perhaps shrink the image locally before sending?
 - Print cleanly to stdout (opt-in setting? leverage stderr?).
 
 # Later
