@@ -1,64 +1,126 @@
 # lm
 
-A minimal Claude CLI running on your Pro/Max subscription, where you control the context.
+A minimal Claude CLI that runs on your Pro/Max subscription. You own the context.
 
 ## What it is
 
-`lm` opens your editor, you write a prompt, Claude responds. That's the whole loop.
+`lm` gives you a tight loop: open your editor, write a prompt, get a response.
 
-Pipe in context from your terminal, use presets for recurring tasks, and pick up threads by name.
-Everything is plain markdown files in `~/.config/lm/`: readable, editable, and yours.
+It follows UNIX conventions throughout: pipe in context, compose with other tools, store everything as plain text.
+Conversations live in `~/.local/share/lm/threads/` as numbered markdown files you can read, edit, grep, or delete.
+
+No API key. No usage-based billing. Just your existing Claude subscription.
 
 ## Installation
 
 ```sh
 make install   # copies lm to ~/.local/bin/lm
+lm init        # creates config and data directories
 ```
 
-Requires the [Claude CLI](https://github.com/anthropics/claude-code) to be installed and authenticated.
+Requires the [Claude CLI](https://github.com/anthropics/claude-code) installed and authenticated.
 
 ## Usage
 
-Open an editor to write your prompt:
+### Run
+
+Open your editor, write a prompt, get a response:
 
 ```sh
-lm
+lm run
 ```
 
-Pipe in context. It lands under a `# lm Context` section in the editor:
+Pipe in context:
 
 ```sh
-cat somefile.py | lm
-git diff | lm
+cat main.py | lm run
+git diff | lm run
 ```
 
-Use a preset to pre-populate the editor with reusable instructions:
+Attach files:
 
 ```sh
-lm --preset review
-cat foo.py | lm --preset review
+lm run --attach schema.sql --attach notes.md
 ```
 
-Continue a named thread:
+Use a preset:
 
 ```sh
-lm --thread mytopic
-cat error.log | lm --thread mytopic
+lm run --preset review
+cat foo.py | lm run --preset review
 ```
 
-When resuming a thread, past exchanges appear in the editor below a scissors line.
-Everything above the line is your new query.
-The history is there for context, not for sending.
+### Threads
+
+Every run creates a new thread. Use `--thread` to name one and resume it across sessions:
+
+```sh
+lm run --thread refactor
+cat error.log | lm run --thread debug
+```
+
+When resuming, past exchanges appear in the editor below a scissors line — visible for context, not sent again.
+
+Pick up where you left off:
+
+```sh
+lm run --last          # resume the most recent thread
+lm run --select        # pick interactively with fzf
+```
+
+### Chat
+
+Loop continuously in a single thread:
+
+```sh
+lm chat
+lm chat --thread mytopic
+```
+
+### Managing threads
+
+```sh
+lm ls              # list threads with last prompt/response summary
+lm new mytopic     # create a named thread
+lm mv old new      # rename a thread
+```
+
+Create a thread with specific capabilities or model:
+
+```sh
+lm new research --with web
+lm new fast --claude-model claude-haiku-4-5
+```
+
+### Staged workflow
+
+For more control, build a query incrementally before sending:
+
+```sh
+lm edit-prompt --thread mytopic          # write or revise the prompt
+lm attach --thread mytopic schema.sql    # add attachments
+lm commit --thread mytopic               # run inference
+lm clear --thread mytopic                # discard without sending
+```
 
 ## Presets
 
-Store reusable instructions in `~/.config/lm/prompts/<name>.md`.
-They are prepended to the editor buffer on each run, so you can refine or extend them before sending.
+Store reusable instructions in `~/.config/lm/presets/<name>.md`. They're prepended to the editor buffer — refine or extend before sending.
 
-## Threads
+## File layout
 
-Each run creates a thread under `~/.config/lm/threads/`.
-Without `--thread`, it's named after the current timestamp.
-Pass `--thread <name>` to resume or start a named thread.
+```
+~/.config/lm/
+  settings.toml
+  presets/
 
-Thread history is plain files: numbered query/answer pairs (`00A.md`, `00B.md`, `01A.md`, …) you can read, edit, or delete like anything else.
+~/.local/share/lm/threads/<name>/
+  00/
+    prompt.md
+    response.md
+    attachments/
+  01/
+    ...
+```
+
+Every file is plain markdown. Nothing is hidden, nothing is locked in.
