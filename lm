@@ -16,7 +16,7 @@ import tomllib
 import uuid
 from itertools import count
 from pathlib import Path
-from typing import IO, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -182,6 +182,10 @@ def main() -> None:
 
     ls_parser = subparsers.add_parser("ls", help="List threads.")
     ls_parser.set_defaults(func=_cmd_ls)
+
+    show_parser = subparsers.add_parser("show", help="Show the turns of a thread.")
+    show_parser.set_defaults(func=_cmd_show)
+    _add_thread_args(show_parser, required=True)
 
     chat_parser = subparsers.add_parser("chat", help="Loop: edit prompt, run, repeat.")
     chat_parser.set_defaults(func=_cmd_chat)
@@ -433,22 +437,19 @@ def _cmd_ls(_: argparse.Namespace) -> None:
     )
     names = [p.name for p in paths]
 
-    if not sys.stdout.isatty():
-        _write_threads_summary(names, sys.stdout, threads_path)
-        return
+    _write_paged(_format_threads_summary(names, threads_path))
 
-    pager = os.getenv("PAGER", "less")
-    env = os.environ.copy()
-    env.setdefault("LESS", "-FRX")
-    with subprocess.Popen(  # noqa: S603  (running the user pager expected to be safe)
-        pager,
-        stdin=subprocess.PIPE,
-        text=True,
-        env=env,
-    ) as pager_proc:
-        if pager_proc.stdin is None:
-            sys.exit("Unexpected error: Pager standard input not captured")
-        _write_threads_summary(names, pager_proc.stdin, threads_path)
+
+def _cmd_show(args: argparse.Namespace) -> None:
+    data_path = _get_data_path(missing_ok=False)
+    threads_path = data_path / THREADS_PATHNAME
+
+    thread_path = _get_thread_path(args, threads_path)
+
+    history = _build_history(thread_path)
+    history_components = _format_history(history)
+
+    _write_paged("\n\n".join(history_components))
 
 
 def _cmd_chat(args: argparse.Namespace) -> None:
@@ -515,10 +516,29 @@ def _cmd_chat(args: argparse.Namespace) -> None:
 # ---
 
 
-def _write_threads_summary(names: list[str], out: IO[str], threads_path: Path) -> None:
-    for name in names:
-        path = threads_path / name
-        out.write(_format_thread_summary_line(path) + "\n")
+def _write_paged(content: str) -> None:
+    if not sys.stdout.isatty():
+        sys.stdout.write(content)
+        return
+
+    pager = os.getenv("PAGER", "less")
+    env = os.environ.copy()
+    env.setdefault("LESS", "-FRX")
+    with subprocess.Popen(  # noqa: S603  (running the user pager expected to be safe)
+        pager,
+        stdin=subprocess.PIPE,
+        text=True,
+        env=env,
+    ) as pager_proc:
+        if pager_proc.stdin is None:
+            sys.exit("Unexpected error: Pager standard input not captured")
+        pager_proc.stdin.write(content)
+
+
+def _format_threads_summary(names: list[str], threads_path: Path) -> str:
+    return "".join(
+        f"{_format_thread_summary_line(threads_path / name)}\n" for name in names
+    )
 
 
 def _format_thread_summary_line(path: Path) -> str:
@@ -665,15 +685,8 @@ def _edit_prompt(
         editor_command.append("+startinsert")
 
     components: list[str] = []
-    for turn_idx, (turn_prompt, turn_attachments, turn_response) in enumerate(history):
-        prompt_component = f"<!-- Prompt {turn_idx + 1} -->\n\n{turn_prompt}"
-        if len(turn_attachments) > 0:
-            attachments_section = f"\nAttachments: {', '.join(turn_attachments)}"
-            prompt_component += attachments_section
-        response_component = f"<!-- Answer {turn_idx + 1} -->\n\n{turn_response}"
 
-        components.append(prompt_component)
-        components.append(response_component)
+    components.extend(_format_history(history))
 
     if components:
         components.append(scissors_line_component)
@@ -713,6 +726,20 @@ def _edit_prompt(
         return None
 
     return prompt
+
+
+def _format_history(history: list[tuple[str, list[str], str]]) -> list[str]:
+    components: list[str] = []
+    for turn_idx, (turn_prompt, turn_attachments, turn_response) in enumerate(history):
+        prompt_component = f"<!-- Prompt {turn_idx + 1} -->\n\n{turn_prompt}"
+        if len(turn_attachments) > 0:
+            attachments_section = f"\nAttachments: {', '.join(turn_attachments)}"
+            prompt_component += attachments_section
+        response_component = f"<!-- Answer {turn_idx + 1} -->\n\n{turn_response}"
+
+        components.append(prompt_component)
+        components.append(response_component)
+    return components
 
 
 def _execute_turn(
