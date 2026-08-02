@@ -686,15 +686,18 @@ def _edit_prompt(
     path.write_text("\n\n".join(components))
 
     with Path("/dev/tty").open("r") as tty_in, Path("/dev/tty").open("w") as tty_out:
-        subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
+        process_result = subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
             [*editor_command, str(path)],
-            check=True,
+            check=False,
             # For piping stdin
             stdin=tty_in,
             # For piping stdout
             stdout=tty_out,
             stderr=tty_out,
         )
+
+    if process_result.returncode != 0:
+        sys.exit("Editor exited with an error.")
 
     editmsg_fragments = path.read_text().split(f"\n{SCISSORS_LINE}\n")
     path.unlink()
