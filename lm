@@ -240,13 +240,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
         sys.stderr.write(f"Creating new thread: {thread_timestamp}\n")
         thread_path = threads_path / thread_timestamp
-        thread_path.mkdir()
-        (thread_path / CLAUDE_PATHNAME).mkdir()
-        (thread_path / CLAUDE_PATHNAME / SCRATCH_CWD_PATHNAME).mkdir()
-        _write_read_only(
-            thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME, DEFAULT_CLAUDE_MODEL
-        )
-        _write_read_only(thread_path / CLAUDE_PATHNAME / TOOLS_PATHNAME, "")
+        _create_thread(thread_path, claude_model=DEFAULT_CLAUDE_MODEL, claude_tools="")
 
     staged_path = thread_path / STAGED_PATHNAME
     staged_path.mkdir()
@@ -292,16 +286,12 @@ def _cmd_new(args: argparse.Namespace) -> None:
 
     path = threads_path / name
     _assert_thread_doesnt_exist(path)
-    path.mkdir()
 
-    claude_path = path / CLAUDE_PATHNAME
-    claude_path.mkdir()
-
-    (claude_path / SCRATCH_CWD_PATHNAME).mkdir()
-    # We tie these to the thread for simplicity and not to bust cache
-    _write_read_only(claude_path / MODEL_PATHNAME, claude_model)
-    claude_tools = _resolve_claude_tools(capabilities)
-    _write_read_only(claude_path / TOOLS_PATHNAME, claude_tools)
+    _create_thread(
+        path,
+        claude_model=claude_model,
+        claude_tools=_resolve_claude_tools(capabilities),
+    )
 
 
 def _cmd_mv(args: argparse.Namespace) -> None:
@@ -492,13 +482,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
             return
         sys.stderr.write(f"Creating new thread: {thread_timestamp}\n")
         thread_path = threads_path / thread_timestamp
-        thread_path.mkdir()
-        (thread_path / CLAUDE_PATHNAME).mkdir()
-        (thread_path / CLAUDE_PATHNAME / SCRATCH_CWD_PATHNAME).mkdir()
-        _write_read_only(
-            thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME, DEFAULT_CLAUDE_MODEL
-        )
-        _write_read_only(thread_path / CLAUDE_PATHNAME / TOOLS_PATHNAME, "")
+        _create_thread(thread_path, claude_model=DEFAULT_CLAUDE_MODEL, claude_tools="")
 
     while True:
         staged_path = thread_path / STAGED_PATHNAME
@@ -975,6 +959,18 @@ def _write_read_only(path: Path, content: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
     with os.fdopen(fd, "w") as f:
         f.write(content)
+
+
+def _create_thread(path: Path, *, claude_model: str, claude_tools: str) -> None:
+    path.mkdir()
+
+    claude_path = path / CLAUDE_PATHNAME
+    claude_path.mkdir()
+
+    (claude_path / SCRATCH_CWD_PATHNAME).mkdir()
+    # We tie these to the thread for simplicity and not to bust cache
+    _write_read_only(claude_path / MODEL_PATHNAME, claude_model)
+    _write_read_only(claude_path / TOOLS_PATHNAME, claude_tools)
 
 
 def _commit_staged(thread_path: Path, response: str) -> None:
