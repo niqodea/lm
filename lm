@@ -949,7 +949,10 @@ def _build_history(thread_path: Path) -> list[tuple[str, list[str], str]]:
 def _get_char_delay_from_settings(config_path: Path) -> float:
     settings_path = config_path / SETTINGS_PATHNAME
     settings = tomllib.loads(settings_path.read_text())
-    return float(settings.get(SETTINGS_CHAR_DELAY_KEY, "0"))
+    char_delay = settings.get(SETTINGS_CHAR_DELAY_KEY, 0.0)
+    if not isinstance(char_delay, float):
+        sys.exit(f"Setting {SETTINGS_CHAR_DELAY_KEY} must be a float: {char_delay}")
+    return char_delay
 
 
 def _get_config_path(*, missing_ok: bool) -> Path:
