@@ -287,6 +287,8 @@ def _cmd_new(args: argparse.Namespace) -> None:
     capabilities: list[str] = args.capabilities
     claude_model: str = args.claude_model
 
+    _assert_thread_name_is_valid(name)
+
     path = threads_path / name
     _assert_thread_doesnt_exist(path)
     path.mkdir()
@@ -304,6 +306,9 @@ def _cmd_new(args: argparse.Namespace) -> None:
 def _cmd_mv(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
+
+    _assert_thread_name_is_valid(args.src)
+    _assert_thread_name_is_valid(args.dst)
 
     src_path = threads_path / args.src
     dst_path = threads_path / args.dst
@@ -610,6 +615,8 @@ def _get_thread_path(args: argparse.Namespace, threads_path: Path) -> Path:
         thread_name = _select_thread(threads_path)
     else:
         raise RuntimeError("Thread not in arguments.")
+
+    _assert_thread_name_is_valid(thread_name)
 
     thread_path = threads_path / thread_name
 
@@ -982,6 +989,11 @@ def _commit_staged(thread_path: Path, response: str) -> None:
             path.chmod(0o444)
 
     _write_read_only(turn_path / RESPONSE_PATHNAME, response)
+
+
+def _assert_thread_name_is_valid(name: str) -> None:
+    if name == "" or name in {".", ".."} or name.startswith(".") or "/" in name:
+        sys.exit(f"Invalid thread name: {name}")
 
 
 def _assert_thread_exists(path: Path) -> None:
