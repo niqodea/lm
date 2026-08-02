@@ -90,7 +90,7 @@ def main() -> None:
     run_parser.add_argument(
         "-p",
         "--preset",
-        help="Preset name (maps to ~/.config/lm/presets/<name>.md)",
+        help="Preset name.",
     )
     run_parser.add_argument(
         "-a",
@@ -98,7 +98,8 @@ def main() -> None:
         dest="attachments",
         action="append",
         default=[],
-        help="File to attach and make available to the model (repeatable). ",
+        metavar="FILE[:ALIAS]",
+        help="File to attach and make available to the model (repeatable).",
     )
 
     new_parser = subparsers.add_parser(
@@ -108,7 +109,7 @@ def main() -> None:
     new_parser.set_defaults(func=_cmd_new)
     new_parser.add_argument(
         "name",
-        help="Thread name (maps to ~/.config/lm/threads/<name>)",
+        help="Thread name.",
     )
     new_parser.add_argument(
         "-m",
@@ -149,7 +150,7 @@ def main() -> None:
     edit_prompt_parser.add_argument(
         "-p",
         "--preset",
-        help="prompt name (maps to ~/.config/lm/presets/<name>.md)",
+        help="Preset name.",
     )
 
     attach_parser = subparsers.add_parser(
@@ -162,7 +163,7 @@ def main() -> None:
         "attachments",
         nargs="+",
         metavar="FILE[:ALIAS]",
-        help="File to attach (repeatable). ",
+        help="File to attach and make available to the model (repeatable).",
     )
 
     commit_parser = subparsers.add_parser(
@@ -583,7 +584,7 @@ def _add_thread_args(parser: argparse.ArgumentParser, *, required: bool) -> None
     group.add_argument(
         "-t",
         "--thread",
-        help="Thread name (maps to ~/.config/lm/threads/<name>)",
+        help="Thread name.",
     )
     group.add_argument(
         "-l",
