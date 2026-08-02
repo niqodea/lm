@@ -197,6 +197,7 @@ def _cmd_init(_: argparse.Namespace) -> None:
     if not config_path.exists():
         config_path.mkdir()
         (config_path / SETTINGS_PATHNAME).touch()
+        (config_path / PRESETS_PATHNAME).mkdir()
 
     if not data_path.exists():
         data_path.mkdir()
