@@ -550,6 +550,10 @@ def _format_thread_summary_line(path: Path) -> str:
 
     turns_count = _get_turns_count(path)
     parts.append(f"{turns_count:{TURN_IDX_ZEROPAD}d}t")
+
+    if turns_count == 0:
+        return "".join(parts)
+
     parts.append("   ")
 
     last_turn_idx = turns_count - 1
