@@ -83,6 +83,7 @@ lm chat --thread mytopic
 lm ls              # list threads with last prompt/response summary
 lm new mytopic     # create a named thread
 lm mv old new      # rename a thread
+lm rm mytopic      # delete a thread
 lm show -t mytopic # print the turns of a thread
 ```
 

@@ -141,6 +141,16 @@ def main() -> None:
         help="Destination thread name.",
     )
 
+    rm_parser = subparsers.add_parser(
+        "rm",
+        help="Delete a thread.",
+    )
+    rm_parser.set_defaults(func=_cmd_rm)
+    rm_parser.add_argument(
+        "name",
+        help="Thread name.",
+    )
+
     edit_prompt_parser = subparsers.add_parser(
         "edit-prompt",
         help="Edit prompt for the staged query.",
@@ -314,6 +324,35 @@ def _cmd_mv(args: argparse.Namespace) -> None:
     src_path.rename(dst_path)
 
 
+def _cmd_rm(args: argparse.Namespace) -> None:
+    data_path = _get_data_path(missing_ok=False)
+    threads_path = data_path / THREADS_PATHNAME
+
+    _assert_thread_name_is_valid(args.name)
+
+    path = threads_path / args.name
+
+    _assert_thread_exists(path)
+
+    for turn_idx in range(_get_turns_count(path)):
+        _remove_query(path / f"{turn_idx:0{TURN_IDX_ZEROPAD}d}")
+
+    staged_path = path / STAGED_PATHNAME
+    if staged_path.exists():
+        _remove_query(staged_path)
+
+    (path / EDITMSG_PATHNAME).unlink(missing_ok=True)
+
+    claude_path = path / CLAUDE_PATHNAME
+    (claude_path / MODEL_PATHNAME).unlink()
+    (claude_path / TOOLS_PATHNAME).unlink()
+    (claude_path / SESSION_PATHNAME).unlink(missing_ok=True)
+    (claude_path / SCRATCH_CWD_PATHNAME).rmdir()
+    claude_path.rmdir()
+
+    path.rmdir()
+
+
 def _cmd_edit_prompt(args: argparse.Namespace) -> None:
     config_path = _get_config_path(missing_ok=False)
     data_path = _get_data_path(missing_ok=False)
@@ -410,19 +449,7 @@ def _cmd_clear(args: argparse.Namespace) -> None:
     if not staged_path.exists():
         sys.exit("No staged query found.")
 
-    staged_prompt_path = staged_path / PROMPT_PATHNAME
-    staged_prompt_path.unlink(missing_ok=True)
-
-    staged_stdin_path = staged_path / STDIN_PATHNAME
-    staged_stdin_path.unlink(missing_ok=True)
-
-    staged_attachments_path = staged_path / ATTACHMENTS_PATHNAME
-    if staged_attachments_path.exists():
-        for path in staged_attachments_path.iterdir():
-            path.unlink(missing_ok=True)
-        staged_attachments_path.rmdir()
-
-    staged_path.rmdir()
+    _remove_query(staged_path)
 
 
 def _cmd_ls(_: argparse.Namespace) -> None:
@@ -1020,6 +1047,20 @@ def _commit_staged(thread_path: Path, response: str) -> None:
             path.chmod(0o444)
 
     _write_read_only(turn_path / RESPONSE_PATHNAME, response)
+
+
+def _remove_query(path: Path) -> None:
+    (path / PROMPT_PATHNAME).unlink(missing_ok=True)
+    (path / RESPONSE_PATHNAME).unlink(missing_ok=True)
+    (path / STDIN_PATHNAME).unlink(missing_ok=True)
+
+    attachments_path = path / ATTACHMENTS_PATHNAME
+    if attachments_path.exists():
+        for attachment_path in attachments_path.iterdir():
+            attachment_path.unlink()
+        attachments_path.rmdir()
+
+    path.rmdir()
 
 
 def _assert_thread_name_is_valid(name: str) -> None:

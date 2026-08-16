@@ -26,4 +26,6 @@ ignore = [
   "EM101",
   # Too opinionated on exceptions
   "TRY003",
+  # Copyright lives in LICENSE, not per-file headers
+  "CPY",
 ]
