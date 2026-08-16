@@ -945,7 +945,7 @@ def _write_attachments(attachments: list[tuple[Path, str]], path: Path) -> None:
         alias_path = path / alias
         if alias_path.exists():
             sys.exit(f"Attachment already exists with alias '{alias}'")
-        alias_path.copy(source_path)
+        source_path.copy(alias_path)
 
 
 def _compress_text(value: str, max_length: int) -> str:
