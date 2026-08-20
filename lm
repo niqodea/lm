@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -694,11 +695,13 @@ def _get_threads(threads_path: Path) -> list[str]:
 def _edit_prompt(
     path: Path, *, history: list[tuple[str, list[str], str]], draft: str | None
 ) -> str | None:
-    editor = os.getenv("EDITOR", "vim")
+    editor_command = shlex.split(os.getenv("EDITOR", "vim"))
+    if not editor_command:
+        sys.exit("Editor is empty.")
 
-    editor_command = [editor]
+    editor_name = Path(editor_command[0]).name
 
-    prompt_is_last = editor in PROMPT_IS_LAST_EDITORS
+    prompt_is_last = editor_name in PROMPT_IS_LAST_EDITORS
 
     if prompt_is_last:
         editor_command.append("+$")
@@ -712,7 +715,7 @@ def _edit_prompt(
             "<!-- Everything below this scissors line will be ignored. -->\n"
         )
 
-    if editor in INSERT_MODE_EDITORS and draft is None:
+    if editor_name in INSERT_MODE_EDITORS and draft is None:
         # Immediately open in insert mode, pressing 'i' adds real friction!
         editor_command.append("+startinsert")
 
