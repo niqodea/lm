@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
 LM_DATA_DIR_ENV = "LM_DATA_DIR"
+LM_TTY_ENV = "LM_TTY"
 
 SETTINGS_PATHNAME = "settings.toml"
 PRESETS_PATHNAME = "presets"
@@ -733,7 +734,9 @@ def _edit_prompt(
 
     path.write_text("\n\n".join(components))
 
-    with Path("/dev/tty").open("r") as tty_in, Path("/dev/tty").open("w") as tty_out:
+    tty_path = Path(os.getenv(LM_TTY_ENV, "/dev/tty"))
+
+    with tty_path.open("r") as tty_in, tty_path.open("w") as tty_out:
         process_result = subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
             [*editor_command, str(path)],
             check=False,
