@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""Stand-in for the user's editor: rewrites the prompt half of lm's buffer."""
+
+import os
+import sys
+from pathlib import Path
+
+from protocol import EDITOR_ARGV_ENV, EDITOR_BUFFER_ENV, EDITOR_PROMPT_ENV
+
+# Mirrors lm's own buffer format, so changing it there fails these tests
+SCISSORS_SEPARATOR = "\n<!-- ------------------------ >8 ------------------------ -->\n"
+PROMPT_IS_LAST_MARKER = "<!-- Everything above this scissors line will be ignored. -->"
+
+
+def main() -> None:
+    """Rewrite the prompt half of the buffer lm handed us."""
+    buffer_path = Path(sys.argv[-1])
+    buffer = buffer_path.read_text()
+
+    Path(os.environ[EDITOR_ARGV_ENV]).write_text("\n".join(sys.argv[1:-1]))
+    prompt = Path(os.environ[EDITOR_PROMPT_ENV]).read_text()
+
+    # Replace only our half, the way a person editing the buffer would
+    fragments = buffer.split(SCISSORS_SEPARATOR)
+    if PROMPT_IS_LAST_MARKER in buffer:
+        fragments[-1] = prompt
+    else:
+        fragments[0] = prompt
+    edited = SCISSORS_SEPARATOR.join(fragments)
+
+    buffer_path.write_text(edited)
+    # Record what lm will parse back, prompt included
+    Path(os.environ[EDITOR_BUFFER_ENV]).write_text(edited)
+
+
+if __name__ == "__main__":
+    main()
