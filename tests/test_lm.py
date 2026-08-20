@@ -207,7 +207,9 @@ def test_attachment_alias_renames_the_saved_file(lm: Lm, tmp_path: Path) -> None
     attachment_path.write_text("ATTACHED TEXT")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", "--attach", f"{attachment_path}:renamed.md", stdin="")
+    lm.invoke(
+        "run", "--thread", "demo", "--attach", f"{attachment_path}:renamed.md", stdin=""
+    )
 
     attachments_path = lm.get_turn_path("demo", 0) / "attachments"
     assert (attachments_path / "renamed.md").read_text() == "ATTACHED TEXT"
@@ -238,7 +240,9 @@ def test_second_run_starts_a_second_turn(lm: Lm) -> None:
     lm.invoke("run", "--thread", "demo", stdin="")
 
     assert (lm.get_turn_path("demo", 0) / "prompt.md").read_text() == "first question\n"
-    assert (lm.get_turn_path("demo", 1) / "prompt.md").read_text() == "second question\n"
+    assert (
+        lm.get_turn_path("demo", 1) / "prompt.md"
+    ).read_text() == "second question\n"
 
 
 def test_past_turns_appear_in_the_editor(lm: Lm) -> None:
@@ -277,7 +281,9 @@ def test_chat_runs_each_queued_prompt_as_a_turn(lm: Lm) -> None:
 
     assert result.returncode == 0
     assert (lm.get_turn_path("demo", 0) / "prompt.md").read_text() == "first question\n"
-    assert (lm.get_turn_path("demo", 1) / "prompt.md").read_text() == "second question\n"
+    assert (
+        lm.get_turn_path("demo", 1) / "prompt.md"
+    ).read_text() == "second question\n"
 
 
 # --- The staged workflow ---
@@ -292,6 +298,29 @@ def test_edit_prompt_stages_a_prompt(lm: Lm) -> None:
     assert result.returncode == 0
     staged_path = lm.get_staged_path("demo")
     assert (staged_path / "prompt.md").read_text() == "staged question\n"
+
+
+def test_status_shows_the_staged_query(lm: Lm, tmp_path: Path) -> None:
+    lm.set_editor_prompt("staged question\n")
+    attachment_path = tmp_path / "notes.md"
+    attachment_path.write_text("ATTACHED TEXT")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.invoke("edit-prompt", "--thread", "demo", stdin="")
+    lm.invoke("attach", "--thread", "demo", str(attachment_path), stdin="")
+    result = lm.invoke("status", "--thread", "demo", stdin="")
+
+    assert result.returncode == 0
+    assert "staged question" in result.stdout
+    assert "notes.md" in result.stdout
+
+
+def test_status_reports_a_thread_with_nothing_staged(lm: Lm) -> None:
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("status", "--thread", "demo", stdin="")
+
+    assert result.returncode == 0
+    assert "Nothing staged." in result.stdout
 
 
 def test_attach_adds_to_the_staged_query(lm: Lm, tmp_path: Path) -> None:
@@ -358,6 +387,17 @@ def test_thread_capability_reaches_claude(lm: Lm) -> None:
 
     argv = lm.get_claude_argv()
     assert argv[argv.index("--tools") + 1] == "WebFetch,WebSearch"
+
+
+def test_status_shows_the_thread_settings(lm: Lm) -> None:
+    lm.invoke(
+        "new", "demo", "--claude-model", "claude-haiku-4-5", "--with", "web", stdin=""
+    )
+    result = lm.invoke("status", "--thread", "demo", stdin="")
+
+    assert result.returncode == 0
+    assert "claude-haiku-4-5" in result.stdout
+    assert "WebFetch" in result.stdout
 
 
 def test_a_thread_without_capabilities_gets_no_tools(lm: Lm) -> None:

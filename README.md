@@ -85,6 +85,7 @@ lm new mytopic       # create a named thread
 lm rename -t old new # rename a thread
 lm rm -t mytopic     # delete a thread
 lm show -t mytopic   # print the turns of a thread
+lm status -t mytopic # show a thread's settings and staged query
 ```
 
 Create a thread with specific capabilities or model:
@@ -103,6 +104,7 @@ lm edit-prompt --thread mytopic          # write or revise the prompt
 lm attach --thread mytopic schema.sql    # add attachments
 lm commit --thread mytopic               # run inference
 lm clear --thread mytopic                # discard without sending
+lm status --thread mytopic               # see what is staged
 ```
 
 ## Presets

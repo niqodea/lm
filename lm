@@ -59,6 +59,9 @@ LS_NAME_LENGTH = 15
 LS_PROMPT_LENGTH = 30
 LS_RESPONSE_LENGTH = 50
 
+STATUS_LABEL_WIDTH = 8
+STATUS_STAGED_LABEL_WIDTH = 14
+
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 
 INSERT_MODE_EDITORS = {"vim", "nvim"}
@@ -194,6 +197,12 @@ def main() -> None:
     show_parser = subparsers.add_parser("show", help="Show the turns of a thread.")
     show_parser.set_defaults(func=_cmd_show)
     _add_thread_args(show_parser, required=True)
+
+    status_parser = subparsers.add_parser(
+        "status", help="Show the settings of a thread and its staged query."
+    )
+    status_parser.set_defaults(func=_cmd_status)
+    _add_thread_args(status_parser, required=True)
 
     chat_parser = subparsers.add_parser("chat", help="Loop: edit prompt, run, repeat.")
     chat_parser.set_defaults(func=_cmd_chat)
@@ -476,6 +485,15 @@ def _cmd_show(args: argparse.Namespace) -> None:
     _write_paged("\n\n".join(history_components))
 
 
+def _cmd_status(args: argparse.Namespace) -> None:
+    data_path = _get_data_path(missing_ok=False)
+    threads_path = data_path / THREADS_PATHNAME
+
+    thread_path = _get_thread_path(args, threads_path)
+
+    _write_paged(_format_status(thread_path))
+
+
 def _cmd_chat(args: argparse.Namespace) -> None:
     config_path = _get_config_path(missing_ok=False)
     data_path = _get_data_path(missing_ok=False)
@@ -606,6 +624,65 @@ def _format_thread_summary_line(path: Path) -> str:
         parts.append(f"{last_response:<{LS_RESPONSE_LENGTH}}")
 
     return "".join(parts)
+
+
+def _format_status(thread_path: Path) -> str:
+    claude_path = thread_path / CLAUDE_PATHNAME
+    claude_tools = (claude_path / TOOLS_PATHNAME).read_text()
+    tools = "none" if claude_tools == "" else ", ".join(claude_tools.split(","))
+
+    lines = [
+        f"{'Thread:':<{STATUS_LABEL_WIDTH}}{thread_path.name}",
+        f"{'Model:':<{STATUS_LABEL_WIDTH}}{(claude_path / MODEL_PATHNAME).read_text()}",
+        f"{'Tools:':<{STATUS_LABEL_WIDTH}}{tools}",
+        f"{'Turns:':<{STATUS_LABEL_WIDTH}}{_get_turns_count(thread_path)}",
+        "",
+    ]
+
+    staged_path = thread_path / STAGED_PATHNAME
+    if not staged_path.exists():
+        lines.append("Nothing staged.")
+        return "\n".join(lines) + "\n"
+
+    staged_lines = _format_staged(staged_path)
+    # edit-prompt and attach both create the directory before they fill it
+    if len(staged_lines) == 0:
+        lines.append("Staged: empty.")
+        return "\n".join(lines) + "\n"
+
+    lines.append("Staged:")
+    lines.extend(staged_lines)
+
+    return "\n".join(lines) + "\n"
+
+
+def _format_staged(staged_path: Path) -> list[str]:
+    lines: list[str] = []
+
+    prompt_path = staged_path / PROMPT_PATHNAME
+    if prompt_path.exists():
+        prompt = _compress_text(
+            _flatten_text(prompt_path.read_text()),
+            max_length=PROMPT_SUMMARY_MAX_LENGTH,
+        )
+        lines.append(f"  {'prompt':<{STATUS_STAGED_LABEL_WIDTH}}{prompt}")
+
+    stdin_path = staged_path / STDIN_PATHNAME
+    if stdin_path.exists():
+        lines_count = len(stdin_path.read_text().splitlines())
+        plural = "" if lines_count == 1 else "s"
+        lines.append(
+            f"  {'stdin':<{STATUS_STAGED_LABEL_WIDTH}}{lines_count} line{plural}"
+        )
+
+    attachments_path = staged_path / ATTACHMENTS_PATHNAME
+    if attachments_path.exists():
+        names = sorted(p.name for p in attachments_path.iterdir())
+        lines.append(
+            f"  {'attachments':<{STATUS_STAGED_LABEL_WIDTH}}{', '.join(names)}"
+        )
+
+    return lines
 
 
 # ---
