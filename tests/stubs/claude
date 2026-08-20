@@ -1,54 +1,57 @@
 #!/usr/bin/env python3
-"""Stand-in for the claude CLI: records the call and replays a canned response."""
+"""Stand-in for the claude CLI: records the call and plays the scripted run."""
 
 import json
 import os
 import sys
 from pathlib import Path
 
-from protocol import (
-    CLAUDE_ARGV_ENV,
-    CLAUDE_ERROR_ENV,
-    CLAUDE_NO_RESULT_ENV,
-    CLAUDE_RESPONSE_ENV,
-    CLAUDE_STDIN_ENV,
-)
+import protocol
 
 ERROR_RETURNCODE = 1
 
 
 def main() -> None:
-    """Record the call lm made, then replay the canned response."""
-    Path(os.environ[CLAUDE_ARGV_ENV]).write_text(json.dumps(sys.argv[1:]))
-    Path(os.environ[CLAUDE_STDIN_ENV]).write_text(sys.stdin.read())
+    """Record the call lm made, then play the one run the test scripted."""
+    Path(os.environ[protocol.CLAUDE_ARGV_ENV]).write_text(json.dumps(sys.argv[1:]))
+    Path(os.environ[protocol.CLAUDE_STDIN_ENV]).write_text(sys.stdin.read())
 
-    error = Path(os.environ[CLAUDE_ERROR_ENV]).read_text()
-    if error != "":
-        fields = json.loads(error)
-        error_event = {
-            "type": "result",
-            "subtype": fields["subtype"],
-            "is_error": True,
-            "errors": fields["errors"],
-        }
-        sys.stdout.write(json.dumps(error_event) + "\n")
-        sys.exit(ERROR_RETURNCODE)
+    script = json.loads(Path(os.environ[protocol.CLAUDE_SCRIPT_ENV]).read_text())
 
-    response = Path(os.environ[CLAUDE_RESPONSE_ENV]).read_text()
-    event = {
+    kind = protocol.ClaudeKind(script["kind"])
+
+    match kind:
+        case protocol.ClaudeKind.RESPONSE:
+            _write_event(_get_text_event(script["text"]))
+            _write_event({"type": "result", "subtype": "success", "is_error": False})
+        case protocol.ClaudeKind.NO_RESULT:
+            _write_event(_get_text_event(script["text"]))
+        case protocol.ClaudeKind.ERROR:
+            _write_event(
+                {
+                    "type": "result",
+                    "subtype": script["subtype"],
+                    "is_error": True,
+                    "errors": script["errors"],
+                }
+            )
+            sys.exit(ERROR_RETURNCODE)
+        case _:
+            sys.exit(f"Unhandled claude script kind: {kind}")
+
+
+def _get_text_event(text: str) -> dict[str, object]:
+    return {
         "type": "stream_event",
         "event": {
             "type": "content_block_delta",
-            "delta": {"type": "text_delta", "text": response},
+            "delta": {"type": "text_delta", "text": text},
         },
     }
+
+
+def _write_event(event: dict[str, object]) -> None:
     sys.stdout.write(json.dumps(event) + "\n")
-
-    if Path(os.environ[CLAUDE_NO_RESULT_ENV]).read_text() != "":
-        return
-
-    result_event = {"type": "result", "subtype": "success", "is_error": False}
-    sys.stdout.write(json.dumps(result_event) + "\n")
 
 
 if __name__ == "__main__":

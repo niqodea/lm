@@ -55,6 +55,8 @@ class Lm:
         }
 
         lm = Lm(root_path, env)
+        # Every run needs a script, so a test that ignores claude still has one.
+        lm.set_claude_response("")
         lm.invoke("init", stdin="")
         return lm
 
@@ -81,16 +83,25 @@ class Lm:
         self._get_stub_file_path(protocol.EDITOR_PROMPTS_ENV).write_text(queued)
 
     def set_claude_response(self, response: str) -> None:
-        self._get_stub_file_path(protocol.CLAUDE_RESPONSE_ENV).write_text(response)
+        self._set_claude_script(
+            {"kind": protocol.ClaudeKind.RESPONSE, "text": response}
+        )
 
     def set_claude_error(self, subtype: str, errors: list[str]) -> None:
         """Make the claude stub end the turn with an error result."""
-        error = json.dumps({"subtype": subtype, "errors": errors})
-        self._get_stub_file_path(protocol.CLAUDE_ERROR_ENV).write_text(error)
+        self._set_claude_script(
+            {
+                "kind": protocol.ClaudeKind.ERROR,
+                "subtype": subtype,
+                "errors": errors,
+            }
+        )
 
-    def set_claude_no_result(self) -> None:
-        """Make the claude stub end the stream without a result event."""
-        self._get_stub_file_path(protocol.CLAUDE_NO_RESULT_ENV).write_text("1")
+    def set_claude_no_result(self, response: str) -> None:
+        """Make the claude stub stream a response, then stop without a result."""
+        self._set_claude_script(
+            {"kind": protocol.ClaudeKind.NO_RESULT, "text": response}
+        )
 
     def set_selected_thread(self, name: str) -> None:
         self._get_stub_file_path(protocol.FZF_MATCH_ENV).write_text(name)
@@ -123,6 +134,10 @@ class Lm:
 
     def get_turn_path(self, thread: str, turn_idx: int) -> Path:
         return sorted(self.get_thread_path(thread).glob("[0-9]*"))[turn_idx]
+
+    def _set_claude_script(self, script: dict[str, object]) -> None:
+        path = self._get_stub_file_path(protocol.CLAUDE_SCRIPT_ENV)
+        path.write_text(json.dumps(script))
 
     def _get_json(self, name: str) -> list[str]:
         loaded: list[str] = json.loads(self._get_stub_file_path(name).read_text())

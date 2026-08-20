@@ -500,8 +500,7 @@ def test_an_unknown_failure_names_its_subtype(lm: Lm) -> None:
 
 def test_run_reports_a_stream_without_a_result(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
-    lm.set_claude_no_result()
+    lm.set_claude_no_result("4")
 
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("run", "--thread", "demo", stdin="")
