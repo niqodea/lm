@@ -6,13 +6,33 @@ import os
 import sys
 from pathlib import Path
 
-from protocol import CLAUDE_ARGV_ENV, CLAUDE_RESPONSE_ENV, CLAUDE_STDIN_ENV
+from protocol import (
+    CLAUDE_ARGV_ENV,
+    CLAUDE_ERROR_ENV,
+    CLAUDE_NO_RESULT_ENV,
+    CLAUDE_RESPONSE_ENV,
+    CLAUDE_STDIN_ENV,
+)
+
+ERROR_RETURNCODE = 1
 
 
 def main() -> None:
     """Record the call lm made, then replay the canned response."""
     Path(os.environ[CLAUDE_ARGV_ENV]).write_text(json.dumps(sys.argv[1:]))
     Path(os.environ[CLAUDE_STDIN_ENV]).write_text(sys.stdin.read())
+
+    error = Path(os.environ[CLAUDE_ERROR_ENV]).read_text()
+    if error != "":
+        fields = json.loads(error)
+        error_event = {
+            "type": "result",
+            "subtype": fields["subtype"],
+            "is_error": True,
+            "errors": fields["errors"],
+        }
+        sys.stdout.write(json.dumps(error_event) + "\n")
+        sys.exit(ERROR_RETURNCODE)
 
     response = Path(os.environ[CLAUDE_RESPONSE_ENV]).read_text()
     event = {
@@ -23,6 +43,12 @@ def main() -> None:
         },
     }
     sys.stdout.write(json.dumps(event) + "\n")
+
+    if Path(os.environ[CLAUDE_NO_RESULT_ENV]).read_text() != "":
+        return
+
+    result_event = {"type": "result", "subtype": "success", "is_error": False}
+    sys.stdout.write(json.dumps(result_event) + "\n")
 
 
 if __name__ == "__main__":

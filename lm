@@ -71,6 +71,15 @@ SETTINGS_CHAR_DELAY_KEY = "char_delay"
 
 CAPABILITY_CLAUDE_TOOLS = {"web": ("WebFetch", "WebSearch")}
 
+# A failed turn reports itself as a result event with one of these subtypes.
+# Ref: https://code.claude.com/docs/en/agent-sdk/agent-loop#handle-the-result
+CLAUDE_ERROR_SUBTYPE_REASONS = {
+    "error_max_turns": "hit the turn limit",
+    "error_max_budget_usd": "hit the budget limit",
+    "error_during_execution": "an error interrupted the run",
+    "error_max_structured_output_retries": "never got valid structured output",
+}
+
 ATTACHMENT_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 
 INTERRUPT_EXIT_CODE = 130  # 128 + SIGINT
@@ -282,6 +291,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
         _write_attachments(attachments, attachments_path)
 
     response = _execute_turn(
+        thread_name=thread_path.name,
         prompt=prompt,
         piped_stdin=piped_stdin,
         attachments_path=attachments_path,
@@ -427,6 +437,7 @@ def _cmd_commit(args: argparse.Namespace) -> None:
     attachments_path = staged_path / ATTACHMENTS_PATHNAME
 
     response = _execute_turn(
+        thread_name=thread_path.name,
         prompt=prompt,
         piped_stdin=piped_stdin,
         attachments_path=attachments_path if attachments_path.exists() else None,
@@ -526,6 +537,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         (staged_path / PROMPT_PATHNAME).write_text(f"{prompt}\n")
 
         response = _execute_turn(
+            thread_name=thread_path.name,
             prompt=prompt,
             piped_stdin="",
             attachments_path=None,
@@ -845,6 +857,7 @@ def _format_history(history: list[tuple[str, list[str], str]]) -> list[str]:
 
 def _execute_turn(
     *,
+    thread_name: str,
     prompt: str,
     piped_stdin: str,
     attachments_path: Path | None,
@@ -867,6 +880,7 @@ def _execute_turn(
         ) as (claude_session_args, claude_attachments_prompt),
     ):
         return _run_inference(
+            thread_name=thread_name,
             claude_prompt=f"{prompt}\n\n{claude_attachments_prompt}"
             if claude_attachments_prompt
             else prompt,
@@ -882,6 +896,7 @@ def _execute_turn(
 
 def _run_inference(
     *,
+    thread_name: str,
     claude_prompt: str,
     claude_stdin: str,
     claude_model: str,
@@ -932,7 +947,7 @@ def _run_inference(
     process.stdin.write(claude_stdin)
     process.stdin.close()
 
-    # clear screen, helps keeping text stationary as it streams
+    # Clear screen, helps keeping text stationary as it streams.
     sys.stderr.write("\033[2J\033[H")
     sys.stderr.write(f"Running prompt: {prompt_summary}\n\n")
     sys.stderr.flush()
@@ -940,10 +955,23 @@ def _run_inference(
     for line in process.stdout:
         event = json.loads(line)
 
-        if event.get("is_error") is True:
-            sys.stderr.write(json.dumps(event) + "\n")
-            sys.stderr.flush()
-            continue
+        # The result event ends the run, and says whether the turn succeeded.
+        # is_error is in the CLI's own result schema, not the published docs:
+        # false on the success variant, true on every error one.
+        if event["type"] == "result":
+            if event.get("is_error") is True:
+                sys.exit(
+                    _format_inference_failure(
+                        detail=_get_failure_detail(
+                            errors=event.get("errors", []),
+                            error_subtype=event.get("subtype"),
+                        ),
+                        thread_name=thread_name,
+                    )
+                )
+            buffer.write("\n")
+            sys.stdout.write("\n")
+            return buffer.getvalue()
 
         if event["type"] != "stream_event":
             continue
@@ -964,16 +992,33 @@ def _run_inference(
                 sys.stdout.flush()
                 time.sleep(char_delay)
 
-    buffer.write("\n")
-    sys.stdout.write("\n")
-
-    response = buffer.getvalue()
-
+    # Every result event returns or exits, so the stream ended without one.
     process.wait()
-    if process.returncode != 0:
-        sys.exit(process.returncode)
+    sys.exit(
+        _format_inference_failure(
+            detail=f"claude exited {process.returncode} without reporting a result",
+            thread_name=thread_name,
+        )
+    )
 
-    return response
+
+def _get_failure_detail(*, errors: list[str], error_subtype: str | None) -> str:
+    # `errors` is in the CLI result schema, though not in the published docs
+    if len(errors) > 0:
+        return "; ".join(errors)
+    if error_subtype is None:
+        return "error result with no subtype"
+    description = CLAUDE_ERROR_SUBTYPE_REASONS.get(error_subtype, "unknown error")
+    return f"{description} ({error_subtype})"
+
+
+def _format_inference_failure(*, detail: str, thread_name: str) -> str:
+    return (
+        f"Inference failed: {detail}.\n"
+        "Your query is still staged.\n"
+        f"  Retry with:      lm commit -t {thread_name}\n"
+        f"  Discard it with: lm clear -t {thread_name}"
+    )
 
 
 def _get_turns_count(thread_path: Path) -> int:

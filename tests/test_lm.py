@@ -453,6 +453,64 @@ def test_rm_refuses_an_unknown_thread(lm: Lm) -> None:
     assert "Thread does not exist" in result.stderr
 
 
+def test_run_reports_a_failed_inference(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_error("error_max_turns", [])
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "hit the turn limit" in result.stderr
+    assert "lm commit -t demo" in result.stderr
+
+
+def test_a_failed_inference_leaves_the_query_staged(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_error("error_during_execution", [])
+
+    lm.invoke("new", "demo", stdin="")
+    lm.invoke("run", "--thread", "demo", stdin="")
+
+    staged_path = lm.get_staged_path("demo")
+    assert (staged_path / "prompt.md").read_text() == "what is 2+2?\n"
+
+
+def test_run_reports_the_error_text_claude_gave(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_error("error_max_turns", ["Reached maximum number of turns (30)"])
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "Reached maximum number of turns (30)" in result.stderr
+
+
+def test_an_unknown_failure_names_its_subtype(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_error("error_invented_later", [])
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "error_invented_later" in result.stderr
+
+
+def test_run_reports_a_stream_without_a_result(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_response("4")
+    lm.set_claude_no_result()
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "without reporting a result" in result.stderr
+    assert not list(lm.get_thread_path("demo").glob("[0-9]*"))
+
+
 def test_run_refuses_with_a_staged_query(lm: Lm) -> None:
     lm.set_editor_prompt("staged question\n")
 

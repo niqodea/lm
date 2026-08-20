@@ -83,6 +83,15 @@ class Lm:
     def set_claude_response(self, response: str) -> None:
         self._get_stub_file_path(protocol.CLAUDE_RESPONSE_ENV).write_text(response)
 
+    def set_claude_error(self, subtype: str, errors: list[str]) -> None:
+        """Make the claude stub end the turn with an error result."""
+        error = json.dumps({"subtype": subtype, "errors": errors})
+        self._get_stub_file_path(protocol.CLAUDE_ERROR_ENV).write_text(error)
+
+    def set_claude_no_result(self) -> None:
+        """Make the claude stub end the stream without a result event."""
+        self._get_stub_file_path(protocol.CLAUDE_NO_RESULT_ENV).write_text("1")
+
     def set_selected_thread(self, name: str) -> None:
         self._get_stub_file_path(protocol.FZF_MATCH_ENV).write_text(name)
 

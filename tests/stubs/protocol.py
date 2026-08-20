@@ -7,6 +7,8 @@ a test and a stub. An environment variable holds the path of each.
 # Written by the harness before the run, read by the stub during it
 EDITOR_PROMPTS_ENV = "LM_TEST_EDITOR_PROMPTS"
 CLAUDE_RESPONSE_ENV = "LM_TEST_CLAUDE_RESPONSE"
+CLAUDE_ERROR_ENV = "LM_TEST_CLAUDE_ERROR"
+CLAUDE_NO_RESULT_ENV = "LM_TEST_CLAUDE_NO_RESULT"
 FZF_MATCH_ENV = "LM_TEST_FZF_MATCH"
 
 # Written by the stub during the run, read by the harness after it
@@ -18,6 +20,8 @@ CLAUDE_STDIN_ENV = "LM_TEST_CLAUDE_STDIN"
 STUB_FILE_ENVS = (
     EDITOR_PROMPTS_ENV,
     CLAUDE_RESPONSE_ENV,
+    CLAUDE_ERROR_ENV,
+    CLAUDE_NO_RESULT_ENV,
     FZF_MATCH_ENV,
     EDITOR_BUFFER_ENV,
     EDITOR_ARGV_ENV,
