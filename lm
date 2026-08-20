@@ -70,6 +70,8 @@ CAPABILITY_CLAUDE_TOOLS = {"web": ("WebFetch", "WebSearch")}
 
 ATTACHMENT_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 
+INTERRUPT_EXIT_CODE = 130  # 128 + SIGINT
+
 
 def main() -> None:
     """Entry point for the CLI."""
@@ -198,7 +200,11 @@ def main() -> None:
     _add_thread_args(chat_parser, required=False)
 
     args = parser.parse_args()
-    args.func(args)
+
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        sys.exit(INTERRUPT_EXIT_CODE)
 
 
 def _cmd_init(_: argparse.Namespace) -> None:
