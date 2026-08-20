@@ -241,11 +241,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
     if _has_thread_arg(args):
         thread_path = _get_thread_path(args, threads_path)
-        if (thread_path / STAGED_PATHNAME).exists():
-            sys.exit(
-                "Staged query already exists, cannot run. "
-                "Please commit or clear the staged query first."
-            )
+        _assert_no_staged_query(thread_path)
         editmsg_path = thread_path / EDITMSG_PATHNAME
         history = _build_history(thread_path)
         prompt = _edit_prompt(editmsg_path, history=history, draft=draft)
@@ -501,11 +497,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
 
     if _has_thread_arg(args):
         thread_path = _get_thread_path(args, threads_path)
-        if (thread_path / STAGED_PATHNAME).exists():
-            sys.exit(
-                "Staged query already exists, cannot run. "
-                "Please commit or clear the staged query first."
-            )
+        _assert_no_staged_query(thread_path)
         editmsg_path = thread_path / EDITMSG_PATHNAME
         history = _build_history(thread_path)
         prompt = _edit_prompt(editmsg_path, history=history, draft=None)
@@ -1154,6 +1146,16 @@ def _assert_thread_exists(path: Path) -> None:
 def _assert_thread_doesnt_exist(path: Path) -> None:
     if path.exists():
         sys.exit("Thread already exists.")
+
+
+def _assert_no_staged_query(path: Path) -> None:
+    if (path / STAGED_PATHNAME).exists():
+        sys.exit(
+            f"Staged query already exists in thread '{path.name}'.\n"
+            f"  See it with:     lm status -t {path.name}\n"
+            f"  Send it with:    lm commit -t {path.name}\n"
+            f"  Discard it with: lm clear -t {path.name}"
+        )
 
 
 def _resolve_claude_tools(capabilities: list[str]) -> str:

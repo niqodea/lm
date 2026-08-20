@@ -453,6 +453,18 @@ def test_rm_refuses_an_unknown_thread(lm: Lm) -> None:
     assert "Thread does not exist" in result.stderr
 
 
+def test_run_refuses_with_a_staged_query(lm: Lm) -> None:
+    lm.set_editor_prompt("staged question\n")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.invoke("edit-prompt", "--thread", "demo", stdin="")
+    result = lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "Staged query already exists" in result.stderr
+    assert "lm status -t demo" in result.stderr
+
+
 def test_commit_refuses_without_a_staged_query(lm: Lm) -> None:
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("commit", "--thread", "demo", stdin="")
