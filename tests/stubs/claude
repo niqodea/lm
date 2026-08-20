@@ -11,7 +11,7 @@ from protocol import CLAUDE_ARGV_ENV, CLAUDE_RESPONSE_ENV, CLAUDE_STDIN_ENV
 
 def main() -> None:
     """Record the call lm made, then replay the canned response."""
-    Path(os.environ[CLAUDE_ARGV_ENV]).write_text("\n".join(sys.argv[1:]))
+    Path(os.environ[CLAUDE_ARGV_ENV]).write_text(json.dumps(sys.argv[1:]))
     Path(os.environ[CLAUDE_STDIN_ENV]).write_text(sys.stdin.read())
 
     response = Path(os.environ[CLAUDE_RESPONSE_ENV]).read_text()

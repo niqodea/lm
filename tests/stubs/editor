@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Stand-in for the user's editor: rewrites the prompt half of lm's buffer."""
 
+import json
 import os
 import sys
 from pathlib import Path
 
-from protocol import EDITOR_ARGV_ENV, EDITOR_BUFFER_ENV, EDITOR_PROMPT_ENV
+from protocol import (
+    EDITOR_ARGV_ENV,
+    EDITOR_BUFFER_ENV,
+    EDITOR_PROMPTS_ENV,
+    PROMPT_SEPARATOR,
+)
 
 # Mirrors lm's own buffer format, so changing it there fails these tests
 SCISSORS_SEPARATOR = "\n<!-- ------------------------ >8 ------------------------ -->\n"
@@ -13,24 +19,28 @@ PROMPT_IS_LAST_MARKER = "<!-- Everything above this scissors line will be ignore
 
 
 def main() -> None:
-    """Rewrite the prompt half of the buffer lm handed us."""
+    """Record the buffer lm built, then write the next prompt into it."""
     buffer_path = Path(sys.argv[-1])
     buffer = buffer_path.read_text()
 
-    Path(os.environ[EDITOR_ARGV_ENV]).write_text("\n".join(sys.argv[1:-1]))
-    prompt = Path(os.environ[EDITOR_PROMPT_ENV]).read_text()
+    Path(os.environ[EDITOR_BUFFER_ENV]).write_text(buffer)
+    Path(os.environ[EDITOR_ARGV_ENV]).write_text(json.dumps(sys.argv[1:-1]))
 
     # Replace only our half, the way a person editing the buffer would
     fragments = buffer.split(SCISSORS_SEPARATOR)
     if PROMPT_IS_LAST_MARKER in buffer:
-        fragments[-1] = prompt
+        fragments[-1] = _take_prompt()
     else:
-        fragments[0] = prompt
-    edited = SCISSORS_SEPARATOR.join(fragments)
+        fragments[0] = _take_prompt()
+    buffer_path.write_text(SCISSORS_SEPARATOR.join(fragments))
 
-    buffer_path.write_text(edited)
-    # Record what lm will parse back, prompt included
-    Path(os.environ[EDITOR_BUFFER_ENV]).write_text(edited)
+
+def _take_prompt() -> str:
+    """Return the next queued prompt, leaving the rest for later runs."""
+    prompts_path = Path(os.environ[EDITOR_PROMPTS_ENV])
+    prompts = prompts_path.read_text().split(PROMPT_SEPARATOR)
+    prompts_path.write_text(PROMPT_SEPARATOR.join(prompts[1:]))
+    return prompts[0]
 
 
 if __name__ == "__main__":

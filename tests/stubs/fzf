@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Stand-in for fzf: picks the offered line the test asked for."""
+
+import os
+import sys
+from pathlib import Path
+
+from protocol import FZF_MATCH_ENV
+
+NOTHING_SELECTED_RETURNCODE = 1
+
+
+def main() -> None:
+    """Print the first offered line containing the wanted text."""
+    match = Path(os.environ[FZF_MATCH_ENV]).read_text()
+    lines = sys.stdin.read().splitlines()
+
+    if match == "":
+        sys.exit(NOTHING_SELECTED_RETURNCODE)
+
+    for line in lines:
+        if match in line:
+            sys.stdout.write(line + "\n")
+            return
+
+    sys.exit(NOTHING_SELECTED_RETURNCODE)
+
+
+if __name__ == "__main__":
+    main()
