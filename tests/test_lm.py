@@ -91,13 +91,13 @@ def test_run_without_a_thread_creates_one(lm: Lm) -> None:
     assert "what is 2+2?" in lm.invoke("ls", stdin="").stdout
 
 
-def test_mv_renames_a_thread(lm: Lm) -> None:
+def test_rename_changes_a_thread_name(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_response("4")
 
     lm.invoke("new", "before", stdin="")
     lm.invoke("run", "--thread", "before", stdin="")
-    result = lm.invoke("mv", "before", "after", stdin="")
+    result = lm.invoke("rename", "--thread", "before", "after", stdin="")
 
     assert result.returncode == 0
     assert not lm.get_thread_path("before").exists()
@@ -110,7 +110,7 @@ def test_rm_deletes_a_thread(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="")
-    result = lm.invoke("rm", "demo", stdin="")
+    result = lm.invoke("rm", "--thread", "demo", stdin="")
 
     assert result.returncode == 0
     assert not lm.get_thread_path("demo").exists()
@@ -396,10 +396,10 @@ def test_an_empty_prompt_creates_no_turn(lm: Lm) -> None:
     assert not list(lm.get_thread_path("demo").glob("[0-9]*"))
 
 
-def test_mv_refuses_an_existing_destination(lm: Lm) -> None:
+def test_rename_refuses_an_existing_destination(lm: Lm) -> None:
     lm.invoke("new", "before", stdin="")
     lm.invoke("new", "after", stdin="")
-    result = lm.invoke("mv", "before", "after", stdin="")
+    result = lm.invoke("rename", "--thread", "before", "after", stdin="")
 
     assert result.returncode != 0
     assert "Thread already exists" in result.stderr
@@ -407,7 +407,7 @@ def test_mv_refuses_an_existing_destination(lm: Lm) -> None:
 
 
 def test_rm_refuses_an_unknown_thread(lm: Lm) -> None:
-    result = lm.invoke("rm", "missing", stdin="")
+    result = lm.invoke("rm", "--thread", "missing", stdin="")
 
     assert result.returncode != 0
     assert "Thread does not exist" in result.stderr

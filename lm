@@ -129,16 +129,13 @@ def main() -> None:
         help="Capabilities to enable for this thread (repeatable).",
     )
 
-    mv_parser = subparsers.add_parser(
-        "mv",
+    rename_parser = subparsers.add_parser(
+        "rename",
         help="Rename a thread.",
     )
-    mv_parser.set_defaults(func=_cmd_mv)
-    mv_parser.add_argument(
-        "src",
-        help="Source thread name.",
-    )
-    mv_parser.add_argument(
+    rename_parser.set_defaults(func=_cmd_rename)
+    _add_thread_args(rename_parser, required=True)
+    rename_parser.add_argument(
         "dst",
         help="Destination thread name.",
     )
@@ -148,10 +145,7 @@ def main() -> None:
         help="Delete a thread.",
     )
     rm_parser.set_defaults(func=_cmd_rm)
-    rm_parser.add_argument(
-        "name",
-        help="Thread name.",
-    )
+    _add_thread_args(rm_parser, required=True)
 
     edit_prompt_parser = subparsers.add_parser(
         "edit-prompt",
@@ -310,17 +304,16 @@ def _cmd_new(args: argparse.Namespace) -> None:
     )
 
 
-def _cmd_mv(args: argparse.Namespace) -> None:
+def _cmd_rename(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    _assert_thread_name_is_valid(args.src)
+    src_path = _get_thread_path(args, threads_path)
+
     _assert_thread_name_is_valid(args.dst)
 
-    src_path = threads_path / args.src
     dst_path = threads_path / args.dst
 
-    _assert_thread_exists(src_path)
     _assert_thread_doesnt_exist(dst_path)
 
     src_path.rename(dst_path)
@@ -330,11 +323,7 @@ def _cmd_rm(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    _assert_thread_name_is_valid(args.name)
-
-    path = threads_path / args.name
-
-    _assert_thread_exists(path)
+    path = _get_thread_path(args, threads_path)
 
     for turn_idx in range(_get_turns_count(path)):
         _remove_query(path / f"{turn_idx:0{TURN_IDX_ZEROPAD}d}")
