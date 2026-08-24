@@ -475,7 +475,9 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         _commit_staged(thread, response)
 
         # Update mutable variables for next iteration
-        history.append((prompt, [], response))
+        history.append(
+            _HistoryEntry(prompt=prompt, attachment_names=[], response=response)
+        )
         try:
             prompt = _edit_prompt(thread.editmsg_path, history=history, draft=None)
         except _EmptyPromptError:
@@ -688,6 +690,15 @@ class _Exchanges:
             return self.path / "response.md"
 
 
+@dataclass(frozen=True)
+class _HistoryEntry:
+    """One past exchange, as the editor shows it back."""
+
+    prompt: str
+    attachment_names: list[str]
+    response: str
+
+
 def _get_thread(args: argparse.Namespace, threads_path: Path) -> _Thread:
     if isinstance(args.thread, str):
         thread_name = args.thread
@@ -772,9 +783,7 @@ class _EmptyPromptError(Exception):
     """The editor came back with nothing."""
 
 
-def _edit_prompt(
-    path: Path, *, history: list[tuple[str, list[str], str]], draft: str | None
-) -> str:
+def _edit_prompt(path: Path, *, history: list[_HistoryEntry], draft: str | None) -> str:
     editor_command = shlex.split(os.getenv("EDITOR", "vim"))
     if not editor_command:
         sys.exit("Editor is empty.")
@@ -845,14 +854,13 @@ def _edit_prompt(
     return prompt
 
 
-def _format_history(history: list[tuple[str, list[str], str]]) -> list[str]:
+def _format_history(history: list[_HistoryEntry]) -> list[str]:
     components: list[str] = []
-    for turn_idx, (turn_prompt, turn_attachments, turn_response) in enumerate(history):
-        prompt_component = f"<!-- Prompt {turn_idx + 1} -->\n\n{turn_prompt}"
-        if len(turn_attachments) > 0:
-            attachments_section = f"\nAttachments: {', '.join(turn_attachments)}"
-            prompt_component += attachments_section
-        response_component = f"<!-- Answer {turn_idx + 1} -->\n\n{turn_response}"
+    for idx, entry in enumerate(history):
+        prompt_component = f"<!-- Prompt {idx + 1} -->\n\n{entry.prompt}"
+        if len(entry.attachment_names) > 0:
+            prompt_component += f"\nAttachments: {', '.join(entry.attachment_names)}"
+        response_component = f"<!-- Answer {idx + 1} -->\n\n{entry.response}"
 
         components.append(prompt_component)
         components.append(response_component)
@@ -1063,18 +1071,22 @@ def _compress_text(value: str, max_length: int) -> str:
     return f"{value[:left]}...{value[-right:]}"
 
 
-def _build_history(thread: _Thread) -> list[tuple[str, list[str], str]]:
-    entries: list[tuple[str, list[str], str]] = []
+def _build_history(thread: _Thread) -> list[_HistoryEntry]:
+    entries: list[_HistoryEntry] = []
     for idx in range(_get_turns_count(thread)):
         turn = _Exchanges.Turn(thread.get_turn_path(idx))
-        prompt = turn.prompt_path.read_text()
         attachments_path = turn.attachments_path
         if attachments_path.exists():
-            attachments = [p.name for p in attachments_path.iterdir()]
+            attachment_names = [p.name for p in attachments_path.iterdir()]
         else:
-            attachments = []
-        response = turn.response_path.read_text()
-        entries.append((prompt, attachments, response))
+            attachment_names = []
+        entries.append(
+            _HistoryEntry(
+                prompt=turn.prompt_path.read_text(),
+                attachment_names=attachment_names,
+                response=turn.response_path.read_text(),
+            )
+        )
     return entries
 
 
