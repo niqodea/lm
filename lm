@@ -234,36 +234,14 @@ def _cmd_run(args: argparse.Namespace) -> None:
     draft = None if preset_name is None else _get_preset(preset_name, config_path)
     attachments = [_get_attachment(a) for a in args.attachments]
 
-    if _has_thread_arg(args):
-        thread = _get_thread(args, threads_path)
-        _assert_no_staged_query(thread)
-        history = _build_history(thread)
-        prompt = _edit_prompt(thread.editmsg_path, history=history, draft=draft)
-        if prompt is None:
-            sys.exit("Prompt is empty, exiting.")
-    else:
-        thread_timestamp = (
-            datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-        )
-        editmsg_pathname = TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE.format(
-            timestamp=thread_timestamp
-        )
-        editmsg_path = threads_path / editmsg_pathname
-        prompt = _edit_prompt(editmsg_path, history=[], draft=draft)
-        if prompt is None:
-            sys.exit("Prompt is empty, exiting.")
-
-        sys.stderr.write(f"Creating new thread: {thread_timestamp}\n")
-        thread = _create_thread(
-            threads_path / thread_timestamp,
-            claude_model=DEFAULT_CLAUDE_MODEL,
-            claude_tools="",
-        )
+    try:
+        thread, prompt = _resolve_thread_and_prompt(args, threads_path, draft=draft)
+    except _EmptyPromptError:
+        sys.exit("Prompt is empty, exiting.")
 
     staged = _Exchanges.Query(thread.staged_path)
     staged.path.mkdir()
-    # new line at the end to be in line with response and stick to best practices
-    staged.prompt_path.write_text(f"{prompt}\n")
+    _write_prompt(staged, prompt)
 
     if sys.stdin.isatty():
         piped_stdin = ""
@@ -371,12 +349,12 @@ def _cmd_edit_prompt(args: argparse.Namespace) -> None:
             sys.exit("Staged prompt already exists, cannot apply preset.")
 
     history = _build_history(thread)
-    prompt = _edit_prompt(thread.editmsg_path, history=history, draft=draft)
-    if prompt is None:
+    try:
+        prompt = _edit_prompt(thread.editmsg_path, history=history, draft=draft)
+    except _EmptyPromptError:
         sys.exit("Prompt is empty, exiting.")
 
-    # new line at the end to be in line with response and stick to best practices
-    staged_prompt_path.write_text(f"{prompt}\n")
+    _write_prompt(staged, prompt)
 
 
 def _cmd_attach(args: argparse.Namespace) -> None:
@@ -482,38 +460,17 @@ def _cmd_chat(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    if _has_thread_arg(args):
-        thread = _get_thread(args, threads_path)
-        _assert_no_staged_query(thread)
-        editmsg_path = thread.editmsg_path
-        history = _build_history(thread)
-        prompt = _edit_prompt(editmsg_path, history=history, draft=None)
-        if prompt is None:
-            return
-    else:
-        thread_timestamp = (
-            datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-        )
-        editmsg_pathname = TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE.format(
-            timestamp=thread_timestamp
-        )
-        editmsg_path = threads_path / editmsg_pathname
-        history = []
-        prompt = _edit_prompt(editmsg_path, history=history, draft=None)
-        if prompt is None:
-            return
-        sys.stderr.write(f"Creating new thread: {thread_timestamp}\n")
-        thread = _create_thread(
-            threads_path / thread_timestamp,
-            claude_model=DEFAULT_CLAUDE_MODEL,
-            claude_tools="",
-        )
+    try:
+        thread, prompt = _resolve_thread_and_prompt(args, threads_path, draft=None)
+    except _EmptyPromptError:
+        return
+
+    history = _build_history(thread)
 
     while True:
         staged = _Exchanges.Query(thread.staged_path)
-        staged.path.mkdir(exist_ok=True)
-        # new line at the end to be in line with response and stick to best practices
-        staged.prompt_path.write_text(f"{prompt}\n")
+        staged.path.mkdir()
+        _write_prompt(staged, prompt)
 
         response = _execute_turn(
             thread,
@@ -527,8 +484,9 @@ def _cmd_chat(args: argparse.Namespace) -> None:
 
         # Update mutable variables for next iteration
         history.append((prompt, [], response))
-        prompt = _edit_prompt(editmsg_path, history=history, draft=None)
-        if prompt is None:
+        try:
+            prompt = _edit_prompt(thread.editmsg_path, history=history, draft=None)
+        except _EmptyPromptError:
             return
 
 
@@ -815,9 +773,39 @@ def _get_threads(threads_path: Path) -> list[str]:
     return [p.name for p in paths]
 
 
+def _resolve_thread_and_prompt(
+    args: argparse.Namespace, threads_path: Path, *, draft: str | None
+) -> tuple[_Thread, str]:
+    if _has_thread_arg(args):
+        thread = _get_thread(args, threads_path)
+        _assert_no_staged_query(thread)
+        history = _build_history(thread)
+        return thread, _edit_prompt(thread.editmsg_path, history=history, draft=draft)
+
+    thread_timestamp = datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    editmsg_pathname = TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE.format(
+        timestamp=thread_timestamp
+    )
+    # The thread is written only once there is a prompt for it, so abandoning
+    # the editor leaves no empty thread behind
+    prompt = _edit_prompt(threads_path / editmsg_pathname, history=[], draft=draft)
+
+    sys.stderr.write(f"Creating new thread: {thread_timestamp}\n")
+    thread = _create_thread(
+        threads_path / thread_timestamp,
+        claude_model=DEFAULT_CLAUDE_MODEL,
+        claude_tools="",
+    )
+    return thread, prompt
+
+
+class _EmptyPromptError(Exception):
+    """The editor came back with nothing."""
+
+
 def _edit_prompt(
     path: Path, *, history: list[tuple[str, list[str], str]], draft: str | None
-) -> str | None:
+) -> str:
     editor_command = shlex.split(os.getenv("EDITOR", "vim"))
     if not editor_command:
         sys.exit("Editor is empty.")
@@ -883,7 +871,7 @@ def _edit_prompt(
     prompt = prompt_fragment.strip()
 
     if prompt == "":
-        return None
+        raise _EmptyPromptError
 
     return prompt
 
@@ -1081,6 +1069,11 @@ def _get_attachment(arg: str) -> tuple[Path, str]:
     if path.stat().st_size > ATTACHMENT_MAX_SIZE_BYTES:
         sys.exit(f"Attachment too large: {path}")
     return path, alias
+
+
+def _write_prompt(query: _Exchanges.Query, prompt: str) -> None:
+    # new line at the end to be in line with response and stick to best practices
+    query.prompt_path.write_text(f"{prompt}\n")
 
 
 def _write_attachments(attachments: list[tuple[Path, str]], path: Path) -> None:
