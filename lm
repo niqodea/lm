@@ -15,6 +15,7 @@ import sys
 import time
 import tomllib
 import uuid
+from dataclasses import dataclass
 from itertools import count
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,17 +30,7 @@ SETTINGS_PATHNAME = "settings.toml"
 PRESETS_PATHNAME = "presets"
 
 THREADS_PATHNAME = "threads"
-
-TURN_IDX_ZEROPAD = 2
-EDITMSG_PATHNAME = ".EDITMSG.md"
 TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE = ".{timestamp}-EDITMSG.md"
-STAGED_PATHNAME = "STAGED"
-
-CLAUDE_PATHNAME = ".claude"
-SCRATCH_CWD_PATHNAME = "scratch-cwd"
-MODEL_PATHNAME = "model"
-SESSION_PATHNAME = "session.jsonl"
-TOOLS_PATHNAME = "tools"
 
 PROMPT_PATHNAME = "prompt.md"
 RESPONSE_PATHNAME = "response.md"
@@ -56,6 +47,7 @@ You are a helpful assistant. Answer the question concisely.
 PROMPT_SUMMARY_MAX_LENGTH = 100
 
 LS_NAME_LENGTH = 15
+LS_TURNS_COUNT_WIDTH = 2
 LS_PROMPT_LENGTH = 30
 LS_RESPONSE_LENGTH = 50
 
@@ -249,11 +241,10 @@ def _cmd_run(args: argparse.Namespace) -> None:
     attachments = [_get_attachment(a) for a in args.attachments]
 
     if _has_thread_arg(args):
-        thread_path = _get_thread_path(args, threads_path)
-        _assert_no_staged_query(thread_path)
-        editmsg_path = thread_path / EDITMSG_PATHNAME
-        history = _build_history(thread_path)
-        prompt = _edit_prompt(editmsg_path, history=history, draft=draft)
+        thread = _get_thread(args, threads_path)
+        _assert_no_staged_query(thread)
+        history = _build_history(thread)
+        prompt = _edit_prompt(thread.editmsg_path, history=history, draft=draft)
         if prompt is None:
             sys.exit("Prompt is empty, exiting.")
     else:
@@ -269,10 +260,13 @@ def _cmd_run(args: argparse.Namespace) -> None:
             sys.exit("Prompt is empty, exiting.")
 
         sys.stderr.write(f"Creating new thread: {thread_timestamp}\n")
-        thread_path = threads_path / thread_timestamp
-        _create_thread(thread_path, claude_model=DEFAULT_CLAUDE_MODEL, claude_tools="")
+        thread = _create_thread(
+            threads_path / thread_timestamp,
+            claude_model=DEFAULT_CLAUDE_MODEL,
+            claude_tools="",
+        )
 
-    staged_path = thread_path / STAGED_PATHNAME
+    staged_path = thread.staged_path
     staged_path.mkdir()
     # new line at the end to be in line with response and stick to best practices
     (staged_path / PROMPT_PATHNAME).write_text(f"{prompt}\n")
@@ -291,18 +285,14 @@ def _cmd_run(args: argparse.Namespace) -> None:
         _write_attachments(attachments, attachments_path)
 
     response = _execute_turn(
-        thread_name=thread_path.name,
+        thread,
         prompt=prompt,
         piped_stdin=piped_stdin,
         attachments_path=attachments_path,
-        claude_model=(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME).read_text(),
-        claude_tools=(thread_path / CLAUDE_PATHNAME / TOOLS_PATHNAME).read_text(),
-        claude_scratch_cwd_path=thread_path / CLAUDE_PATHNAME / SCRATCH_CWD_PATHNAME,
-        claude_session_path=(thread_path / CLAUDE_PATHNAME / SESSION_PATHNAME),
         char_delay=_get_char_delay_from_settings(config_path),
     )
 
-    _commit_staged(thread_path, response)
+    _commit_staged(thread, response)
 
 
 def _cmd_new(args: argparse.Namespace) -> None:
@@ -329,7 +319,7 @@ def _cmd_rename(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    src_path = _get_thread_path(args, threads_path)
+    src = _get_thread(args, threads_path)
 
     _assert_thread_name_is_valid(args.dst)
 
@@ -337,32 +327,30 @@ def _cmd_rename(args: argparse.Namespace) -> None:
 
     _assert_thread_doesnt_exist(dst_path)
 
-    src_path.rename(dst_path)
+    src.path.rename(dst_path)
 
 
 def _cmd_rm(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    path = _get_thread_path(args, threads_path)
+    thread = _get_thread(args, threads_path)
 
-    for turn_idx in range(_get_turns_count(path)):
-        _remove_query(path / f"{turn_idx:0{TURN_IDX_ZEROPAD}d}")
+    for turn_idx in range(_get_turns_count(thread)):
+        _remove_query(thread.get_turn_path(turn_idx))
 
-    staged_path = path / STAGED_PATHNAME
-    if staged_path.exists():
-        _remove_query(staged_path)
+    if thread.staged_path.exists():
+        _remove_query(thread.staged_path)
 
-    (path / EDITMSG_PATHNAME).unlink(missing_ok=True)
+    thread.editmsg_path.unlink(missing_ok=True)
 
-    claude_path = path / CLAUDE_PATHNAME
-    (claude_path / MODEL_PATHNAME).unlink()
-    (claude_path / TOOLS_PATHNAME).unlink()
-    (claude_path / SESSION_PATHNAME).unlink(missing_ok=True)
-    (claude_path / SCRATCH_CWD_PATHNAME).rmdir()
-    claude_path.rmdir()
+    thread.model_path.unlink()
+    thread.tools_path.unlink()
+    thread.session_path.unlink(missing_ok=True)
+    thread.scratch_cwd_path.rmdir()
+    thread.claude_path.rmdir()
 
-    path.rmdir()
+    thread.path.rmdir()
 
 
 def _cmd_edit_prompt(args: argparse.Namespace) -> None:
@@ -370,10 +358,10 @@ def _cmd_edit_prompt(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread_path = _get_thread_path(args, threads_path)
+    thread = _get_thread(args, threads_path)
     preset_name: str | None = args.preset
 
-    staged_path = thread_path / STAGED_PATHNAME
+    staged_path = thread.staged_path
     staged_path.mkdir(exist_ok=True)
 
     staged_prompt_path = staged_path / PROMPT_PATHNAME
@@ -388,8 +376,8 @@ def _cmd_edit_prompt(args: argparse.Namespace) -> None:
         case True, str():
             sys.exit("Staged prompt already exists, cannot apply preset.")
 
-    history = _build_history(thread_path)
-    prompt = _edit_prompt(thread_path / EDITMSG_PATHNAME, history=history, draft=draft)
+    history = _build_history(thread)
+    prompt = _edit_prompt(thread.editmsg_path, history=history, draft=draft)
     if prompt is None:
         sys.exit("Prompt is empty, exiting.")
 
@@ -401,10 +389,10 @@ def _cmd_attach(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread_path = _get_thread_path(args, threads_path)
+    thread = _get_thread(args, threads_path)
     attachments = [_get_attachment(a) for a in args.attachments]
 
-    staged_path = thread_path / STAGED_PATHNAME
+    staged_path = thread.staged_path
     staged_path.mkdir(exist_ok=True)
 
     attachments_path = staged_path / ATTACHMENTS_PATHNAME
@@ -417,9 +405,9 @@ def _cmd_commit(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread_path = _get_thread_path(args, threads_path)
+    thread = _get_thread(args, threads_path)
 
-    staged_path = thread_path / STAGED_PATHNAME
+    staged_path = thread.staged_path
     if not staged_path.exists():
         sys.exit("No staged query found.")
 
@@ -437,27 +425,23 @@ def _cmd_commit(args: argparse.Namespace) -> None:
     attachments_path = staged_path / ATTACHMENTS_PATHNAME
 
     response = _execute_turn(
-        thread_name=thread_path.name,
+        thread,
         prompt=prompt,
         piped_stdin=piped_stdin,
         attachments_path=attachments_path if attachments_path.exists() else None,
-        claude_model=(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME).read_text(),
-        claude_tools=(thread_path / CLAUDE_PATHNAME / TOOLS_PATHNAME).read_text(),
-        claude_scratch_cwd_path=thread_path / CLAUDE_PATHNAME / SCRATCH_CWD_PATHNAME,
-        claude_session_path=thread_path / CLAUDE_PATHNAME / SESSION_PATHNAME,
         char_delay=_get_char_delay_from_settings(config_path),
     )
 
-    _commit_staged(thread_path, response)
+    _commit_staged(thread, response)
 
 
 def _cmd_clear(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread_path = _get_thread_path(args, threads_path)
+    thread = _get_thread(args, threads_path)
 
-    staged_path = thread_path / STAGED_PATHNAME
+    staged_path = thread.staged_path
 
     if not staged_path.exists():
         sys.exit("No staged query found.")
@@ -475,18 +459,17 @@ def _cmd_ls(_: argparse.Namespace) -> None:
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    names = [p.name for p in paths]
 
-    _write_paged(_format_threads_summary(names, threads_path))
+    _write_paged(_format_threads_summary([_Thread(p) for p in paths]))
 
 
 def _cmd_show(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread_path = _get_thread_path(args, threads_path)
+    thread = _get_thread(args, threads_path)
 
-    history = _build_history(thread_path)
+    history = _build_history(thread)
     history_components = _format_history(history)
 
     _write_paged("\n\n".join(history_components))
@@ -496,9 +479,9 @@ def _cmd_status(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread_path = _get_thread_path(args, threads_path)
+    thread = _get_thread(args, threads_path)
 
-    _write_paged(_format_status(thread_path))
+    _write_paged(_format_status(thread))
 
 
 def _cmd_chat(args: argparse.Namespace) -> None:
@@ -507,10 +490,10 @@ def _cmd_chat(args: argparse.Namespace) -> None:
     threads_path = data_path / THREADS_PATHNAME
 
     if _has_thread_arg(args):
-        thread_path = _get_thread_path(args, threads_path)
-        _assert_no_staged_query(thread_path)
-        editmsg_path = thread_path / EDITMSG_PATHNAME
-        history = _build_history(thread_path)
+        thread = _get_thread(args, threads_path)
+        _assert_no_staged_query(thread)
+        editmsg_path = thread.editmsg_path
+        history = _build_history(thread)
         prompt = _edit_prompt(editmsg_path, history=history, draft=None)
         if prompt is None:
             return
@@ -527,30 +510,27 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         if prompt is None:
             return
         sys.stderr.write(f"Creating new thread: {thread_timestamp}\n")
-        thread_path = threads_path / thread_timestamp
-        _create_thread(thread_path, claude_model=DEFAULT_CLAUDE_MODEL, claude_tools="")
+        thread = _create_thread(
+            threads_path / thread_timestamp,
+            claude_model=DEFAULT_CLAUDE_MODEL,
+            claude_tools="",
+        )
 
     while True:
-        staged_path = thread_path / STAGED_PATHNAME
+        staged_path = thread.staged_path
         staged_path.mkdir(exist_ok=True)
         # new line at the end to be in line with response and stick to best practices
         (staged_path / PROMPT_PATHNAME).write_text(f"{prompt}\n")
 
         response = _execute_turn(
-            thread_name=thread_path.name,
+            thread,
             prompt=prompt,
             piped_stdin="",
             attachments_path=None,
-            claude_model=(thread_path / CLAUDE_PATHNAME / MODEL_PATHNAME).read_text(),
-            claude_tools=(thread_path / CLAUDE_PATHNAME / TOOLS_PATHNAME).read_text(),
-            claude_scratch_cwd_path=thread_path
-            / CLAUDE_PATHNAME
-            / SCRATCH_CWD_PATHNAME,
-            claude_session_path=(thread_path / CLAUDE_PATHNAME / SESSION_PATHNAME),
             char_delay=_get_char_delay_from_settings(config_path),
         )
 
-        _commit_staged(thread_path, response)
+        _commit_staged(thread, response)
 
         # Update mutable variables for next iteration
         history.append((prompt, [], response))
@@ -581,29 +561,26 @@ def _write_paged(content: str) -> None:
         pager_proc.stdin.write(content)
 
 
-def _format_threads_summary(names: list[str], threads_path: Path) -> str:
-    return "".join(
-        f"{_format_thread_summary_line(threads_path / name)}\n" for name in names
-    )
+def _format_threads_summary(threads: list[_Thread]) -> str:
+    return "".join(f"{_format_thread_summary_line(thread)}\n" for thread in threads)
 
 
-def _format_thread_summary_line(path: Path) -> str:
+def _format_thread_summary_line(thread: _Thread) -> str:
     parts: list[str] = []
 
-    name = path.name
+    name = thread.name
     parts.append(f"{_compress_text(name, max_length=LS_NAME_LENGTH):<{LS_NAME_LENGTH}}")
     parts.append("   ")
 
-    turns_count = _get_turns_count(path)
-    parts.append(f"{turns_count:{TURN_IDX_ZEROPAD}d}t")
+    turns_count = _get_turns_count(thread)
+    parts.append(f"{turns_count:{LS_TURNS_COUNT_WIDTH}d}t")
 
     if turns_count == 0:
         return "".join(parts)
 
     parts.append("   ")
 
-    last_turn_idx = turns_count - 1
-    last_turn_path = path / f"{last_turn_idx:0{TURN_IDX_ZEROPAD}d}"
+    last_turn_path = thread.get_turn_path(turns_count - 1)
 
     last_prompt_path = last_turn_path / PROMPT_PATHNAME
     if not last_prompt_path.exists():
@@ -630,20 +607,19 @@ def _format_thread_summary_line(path: Path) -> str:
     return "".join(parts)
 
 
-def _format_status(thread_path: Path) -> str:
-    claude_path = thread_path / CLAUDE_PATHNAME
-    claude_tools = (claude_path / TOOLS_PATHNAME).read_text()
+def _format_status(thread: _Thread) -> str:
+    claude_tools = thread.tools_path.read_text()
     tools = "none" if claude_tools == "" else ", ".join(claude_tools.split(","))
 
     lines = [
-        f"{'Thread:':<{STATUS_LABEL_WIDTH}}{thread_path.name}",
-        f"{'Model:':<{STATUS_LABEL_WIDTH}}{(claude_path / MODEL_PATHNAME).read_text()}",
+        f"{'Thread:':<{STATUS_LABEL_WIDTH}}{thread.name}",
+        f"{'Model:':<{STATUS_LABEL_WIDTH}}{thread.model_path.read_text()}",
         f"{'Tools:':<{STATUS_LABEL_WIDTH}}{tools}",
-        f"{'Turns:':<{STATUS_LABEL_WIDTH}}{_get_turns_count(thread_path)}",
+        f"{'Turns:':<{STATUS_LABEL_WIDTH}}{_get_turns_count(thread)}",
         "",
     ]
 
-    staged_path = thread_path / STAGED_PATHNAME
+    staged_path = thread.staged_path
     if not staged_path.exists():
         lines.append("Nothing staged.")
         return "\n".join(lines) + "\n"
@@ -717,7 +693,49 @@ def _has_thread_arg(args: argparse.Namespace) -> bool:
     return args.thread is not None or args.last is True or args.select is True
 
 
-def _get_thread_path(args: argparse.Namespace, threads_path: Path) -> Path:
+@dataclass(frozen=True)
+class _Thread:
+    """A thread directory, and where everything sits inside it."""
+
+    path: Path
+
+    @property
+    def name(self) -> str:
+        return self.path.name
+
+    @property
+    def editmsg_path(self) -> Path:
+        return self.path / ".EDITMSG.md"
+
+    @property
+    def staged_path(self) -> Path:
+        return self.path / "STAGED"
+
+    @property
+    def claude_path(self) -> Path:
+        return self.path / ".claude"
+
+    @property
+    def model_path(self) -> Path:
+        return self.claude_path / "model"
+
+    @property
+    def tools_path(self) -> Path:
+        return self.claude_path / "tools"
+
+    @property
+    def session_path(self) -> Path:
+        return self.claude_path / "session.jsonl"
+
+    @property
+    def scratch_cwd_path(self) -> Path:
+        return self.claude_path / "scratch-cwd"
+
+    def get_turn_path(self, idx: int) -> Path:
+        return self.path / f"{idx:02d}"
+
+
+def _get_thread(args: argparse.Namespace, threads_path: Path) -> _Thread:
     if isinstance(args.thread, str):
         thread_name = args.thread
     elif args.last is True:
@@ -732,11 +750,11 @@ def _get_thread_path(args: argparse.Namespace, threads_path: Path) -> Path:
 
     _assert_thread_name_is_valid(thread_name)
 
-    thread_path = threads_path / thread_name
+    path = threads_path / thread_name
 
-    _assert_thread_exists(thread_path)
+    _assert_thread_exists(path)
 
-    return thread_path
+    return _Thread(path)
 
 
 def _select_thread(threads_path: Path) -> str:
@@ -744,7 +762,9 @@ def _select_thread(threads_path: Path) -> str:
     if not names:
         sys.exit("No threads found.")
 
-    summary_to_name = {_format_thread_summary_line(threads_path / n): n for n in names}
+    summary_to_name = {
+        _format_thread_summary_line(_Thread(threads_path / n)): n for n in names
+    }
 
     result = subprocess.run(
         ["fzf", "--no-sort"],  # noqa: S607  (we expect path variable to be safe)
@@ -856,101 +876,83 @@ def _format_history(history: list[tuple[str, list[str], str]]) -> list[str]:
 
 
 def _execute_turn(
+    thread: _Thread,
     *,
-    thread_name: str,
     prompt: str,
     piped_stdin: str,
     attachments_path: Path | None,
-    claude_model: str,
-    claude_tools: str,
-    claude_scratch_cwd_path: Path,
-    claude_session_path: Path,
     char_delay: float,
 ) -> str:
-
     prompt_summary = _compress_text(
         _flatten_text(prompt), max_length=PROMPT_SUMMARY_MAX_LENGTH
     )
+    claude_tools = thread.tools_path.read_text()
 
-    with (
-        _ClaudeContext.create(
-            session_path=claude_session_path,
-            scratch_cwd_path=claude_scratch_cwd_path,
-            attachments_path=attachments_path,
-        ) as (claude_session_args, claude_attachments_prompt),
-    ):
-        return _run_inference(
-            thread_name=thread_name,
-            claude_prompt=f"{prompt}\n\n{claude_attachments_prompt}"
-            if claude_attachments_prompt
-            else prompt,
-            claude_stdin=piped_stdin,
-            claude_model=claude_model,
-            claude_tools=claude_tools,
-            claude_scratch_cwd_path=claude_scratch_cwd_path,
-            claude_session_args=claude_session_args,
-            prompt_summary=prompt_summary,
-            char_delay=char_delay,
+    with _ClaudeContext.create(
+        session_path=thread.session_path,
+        scratch_cwd_path=thread.scratch_cwd_path,
+        attachments_path=attachments_path,
+    ) as (claude_session_args, claude_attachments_prompt):
+        claude_prompt = (
+            prompt
+            if claude_attachments_prompt is None
+            else f"{prompt}\n\n{claude_attachments_prompt}"
         )
 
+        command = [
+            "claude",
+            claude_prompt,
+            "--model",
+            thread.model_path.read_text(),
+            *claude_session_args,
+            # Simplify behavior
+            "--system-prompt",
+            SYSTEM_PROMPT,
+            "--print",
+            # Restrict tool context
+            "--tools",
+            claude_tools,
+            # Pre-approve to avoid permission errors in print mode
+            "--allowed-tools",
+            claude_tools,
+            # To stream response text
+            "--include-partial-messages",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+        ]
 
-def _run_inference(
-    *,
-    thread_name: str,
-    claude_prompt: str,
-    claude_stdin: str,
-    claude_model: str,
-    claude_tools: str,
-    claude_scratch_cwd_path: Path,
-    claude_session_args: tuple[str, str],
-    prompt_summary: str,
-    char_delay: float,
+        process = subprocess.Popen(  # noqa: S603  (command is not user-provided)
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            # --bare / CLAUDE_CODE_SIMPLE disables OAuth and routes billing to API
+            # Still, as long as we set CWD to a bare directory, no CLAUDE.md will be
+            # picked up.
+            cwd=thread.scratch_cwd_path,
+        )
+
+        if process.stdin is None:
+            sys.exit("Unexpected error: Claude standard input not captured")
+
+        process.stdin.write(piped_stdin)
+        process.stdin.close()
+
+        # Clear screen, helps keeping text stationary as it streams.
+        sys.stderr.write("\033[2J\033[H")
+        sys.stderr.write(f"Running prompt: {prompt_summary}\n\n")
+        sys.stderr.flush()
+
+        return _read_response(process, thread_name=thread.name, char_delay=char_delay)
+
+
+def _read_response(
+    process: subprocess.Popen[str], *, thread_name: str, char_delay: float
 ) -> str:
+    if process.stdout is None:
+        sys.exit("Unexpected error: Claude standard output not captured")
 
-    command = [
-        "claude",
-        claude_prompt,
-        "--model",
-        claude_model,
-        *claude_session_args,
-        # Simplify behavior
-        "--system-prompt",
-        SYSTEM_PROMPT,
-        "--print",
-        # Restrict tool context
-        "--tools",
-        claude_tools,
-        # Pre-approve to avoid permission errors in print mode
-        "--allowed-tools",
-        claude_tools,
-        # To stream response text
-        "--include-partial-messages",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-    ]
-
-    process = subprocess.Popen(  # noqa: S603  (command is not user-provided)
-        command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
-        # --bare / CLAUDE_CODE_SIMPLE disables OAuth and routes billing to API
-        # Still, as long as we set CWD to a bare directory, no CLAUDE.md will be
-        # picked up.
-        cwd=claude_scratch_cwd_path,
-    )
-
-    if process.stdin is None or process.stdout is None:
-        sys.exit("Unexpected error: Claude standard streams not captured")
-
-    process.stdin.write(claude_stdin)
-    process.stdin.close()
-
-    # Clear screen, helps keeping text stationary as it streams.
-    sys.stderr.write("\033[2J\033[H")
-    sys.stderr.write(f"Running prompt: {prompt_summary}\n\n")
-    sys.stderr.flush()
     buffer = io.StringIO()
     for line in process.stdout:
         event = json.loads(line)
@@ -1021,10 +1023,9 @@ def _format_inference_failure(*, detail: str, thread_name: str) -> str:
     )
 
 
-def _get_turns_count(thread_path: Path) -> int:
+def _get_turns_count(thread: _Thread) -> int:
     for idx in count():
-        turn_path = thread_path / f"{idx:0{TURN_IDX_ZEROPAD}d}"
-        if not turn_path.exists():
+        if not thread.get_turn_path(idx).exists():
             return idx
     raise AssertionError("Unreachable")
 
@@ -1075,10 +1076,10 @@ def _flatten_text(value: str) -> str:
     return " ".join(value.split())
 
 
-def _build_history(thread_path: Path) -> list[tuple[str, list[str], str]]:
+def _build_history(thread: _Thread) -> list[tuple[str, list[str], str]]:
     entries: list[tuple[str, list[str], str]] = []
-    for idx in range(_get_turns_count(thread_path)):
-        turn_path = thread_path / f"{idx:0{TURN_IDX_ZEROPAD}d}"
+    for idx in range(_get_turns_count(thread)):
+        turn_path = thread.get_turn_path(idx)
         prompt_path = turn_path / PROMPT_PATHNAME
         response_path = turn_path / RESPONSE_PATHNAME
         prompt = prompt_path.read_text()
@@ -1137,25 +1138,24 @@ def _write_read_only(path: Path, content: str) -> None:
         f.write(content)
 
 
-def _create_thread(path: Path, *, claude_model: str, claude_tools: str) -> None:
-    path.mkdir()
+def _create_thread(path: Path, *, claude_model: str, claude_tools: str) -> _Thread:
+    thread = _Thread(path)
 
-    claude_path = path / CLAUDE_PATHNAME
-    claude_path.mkdir()
+    thread.path.mkdir()
+    thread.claude_path.mkdir()
+    thread.scratch_cwd_path.mkdir()
 
-    (claude_path / SCRATCH_CWD_PATHNAME).mkdir()
     # We tie these to the thread for simplicity and not to bust cache
-    _write_read_only(claude_path / MODEL_PATHNAME, claude_model)
-    _write_read_only(claude_path / TOOLS_PATHNAME, claude_tools)
+    _write_read_only(thread.model_path, claude_model)
+    _write_read_only(thread.tools_path, claude_tools)
+
+    return thread
 
 
-def _commit_staged(thread_path: Path, response: str) -> None:
-    staged_path = thread_path / STAGED_PATHNAME
+def _commit_staged(thread: _Thread, response: str) -> None:
+    turn_path = thread.get_turn_path(_get_turns_count(thread))
 
-    turn_idx = _get_turns_count(thread_path)
-    turn_path = thread_path / f"{turn_idx:0{TURN_IDX_ZEROPAD}d}"
-
-    staged_path.rename(turn_path)
+    thread.staged_path.rename(turn_path)
 
     for path in turn_path.rglob("*"):
         if path.is_file():
@@ -1193,13 +1193,13 @@ def _assert_thread_doesnt_exist(path: Path) -> None:
         sys.exit("Thread already exists.")
 
 
-def _assert_no_staged_query(path: Path) -> None:
-    if (path / STAGED_PATHNAME).exists():
+def _assert_no_staged_query(thread: _Thread) -> None:
+    if thread.staged_path.exists():
         sys.exit(
-            f"Staged query already exists in thread '{path.name}'.\n"
-            f"  See it with:     lm status -t {path.name}\n"
-            f"  Send it with:    lm commit -t {path.name}\n"
-            f"  Discard it with: lm clear -t {path.name}"
+            f"Staged query already exists in thread '{thread.name}'.\n"
+            f"  See it with:     lm status -t {thread.name}\n"
+            f"  Send it with:    lm commit -t {thread.name}\n"
+            f"  Discard it with: lm clear -t {thread.name}"
         )
 
 
