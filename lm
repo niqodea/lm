@@ -32,12 +32,6 @@ PRESETS_PATHNAME = "presets"
 THREADS_PATHNAME = "threads"
 TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE = ".{timestamp}-EDITMSG.md"
 
-PROMPT_PATHNAME = "prompt.md"
-RESPONSE_PATHNAME = "response.md"
-ATTACHMENTS_PATHNAME = "attachments"
-STDIN_PATHNAME = "stdin"
-
-
 SCISSORS_LINE = "<!-- ------------------------ >8 ------------------------ -->"
 
 SYSTEM_PROMPT = """\
@@ -266,21 +260,21 @@ def _cmd_run(args: argparse.Namespace) -> None:
             claude_tools="",
         )
 
-    staged_path = thread.staged_path
-    staged_path.mkdir()
+    staged = _Exchanges.Query(thread.staged_path)
+    staged.path.mkdir()
     # new line at the end to be in line with response and stick to best practices
-    (staged_path / PROMPT_PATHNAME).write_text(f"{prompt}\n")
+    staged.prompt_path.write_text(f"{prompt}\n")
 
     if sys.stdin.isatty():
         piped_stdin = ""
     else:
         piped_stdin = sys.stdin.read()
-        (staged_path / STDIN_PATHNAME).write_text(piped_stdin)
+        staged.stdin_path.write_text(piped_stdin)
 
     if not attachments:
         attachments_path = None
     else:
-        attachments_path = staged_path / ATTACHMENTS_PATHNAME
+        attachments_path = staged.attachments_path
         attachments_path.mkdir()
         _write_attachments(attachments, attachments_path)
 
@@ -337,10 +331,10 @@ def _cmd_rm(args: argparse.Namespace) -> None:
     thread = _get_thread(args, threads_path)
 
     for turn_idx in range(_get_turns_count(thread)):
-        _remove_query(thread.get_turn_path(turn_idx))
+        _remove_turn(_Exchanges.Turn(thread.get_turn_path(turn_idx)))
 
     if thread.staged_path.exists():
-        _remove_query(thread.staged_path)
+        _remove_query(_Exchanges.Query(thread.staged_path))
 
     thread.editmsg_path.unlink(missing_ok=True)
 
@@ -361,10 +355,10 @@ def _cmd_edit_prompt(args: argparse.Namespace) -> None:
     thread = _get_thread(args, threads_path)
     preset_name: str | None = args.preset
 
-    staged_path = thread.staged_path
-    staged_path.mkdir(exist_ok=True)
+    staged = _Exchanges.Query(thread.staged_path)
+    staged.path.mkdir(exist_ok=True)
 
-    staged_prompt_path = staged_path / PROMPT_PATHNAME
+    staged_prompt_path = staged.prompt_path
 
     match staged_prompt_path.exists(), preset_name:
         case False, None:
@@ -392,10 +386,10 @@ def _cmd_attach(args: argparse.Namespace) -> None:
     thread = _get_thread(args, threads_path)
     attachments = [_get_attachment(a) for a in args.attachments]
 
-    staged_path = thread.staged_path
-    staged_path.mkdir(exist_ok=True)
+    staged = _Exchanges.Query(thread.staged_path)
+    staged.path.mkdir(exist_ok=True)
 
-    attachments_path = staged_path / ATTACHMENTS_PATHNAME
+    attachments_path = staged.attachments_path
     attachments_path.mkdir(exist_ok=True)
     _write_attachments(attachments, attachments_path)
 
@@ -407,22 +401,21 @@ def _cmd_commit(args: argparse.Namespace) -> None:
 
     thread = _get_thread(args, threads_path)
 
-    staged_path = thread.staged_path
-    if not staged_path.exists():
+    staged = _Exchanges.Query(thread.staged_path)
+    if not staged.path.exists():
         sys.exit("No staged query found.")
 
-    staged_prompt_path = staged_path / PROMPT_PATHNAME
-    if not staged_prompt_path.exists():
+    if not staged.prompt_path.exists():
         sys.exit("No staged prompt found.")
 
-    prompt = staged_prompt_path.read_text().strip()
+    prompt = staged.prompt_path.read_text().strip()
     if not prompt:
         sys.exit("Prompt is empty, exiting.")
 
-    staged_stdin_path = staged_path / STDIN_PATHNAME
-    piped_stdin = staged_stdin_path.read_text() if staged_stdin_path.exists() else ""
+    stdin_path = staged.stdin_path
+    piped_stdin = stdin_path.read_text() if stdin_path.exists() else ""
 
-    attachments_path = staged_path / ATTACHMENTS_PATHNAME
+    attachments_path = staged.attachments_path
 
     response = _execute_turn(
         thread,
@@ -441,12 +434,12 @@ def _cmd_clear(args: argparse.Namespace) -> None:
 
     thread = _get_thread(args, threads_path)
 
-    staged_path = thread.staged_path
+    staged = _Exchanges.Query(thread.staged_path)
 
-    if not staged_path.exists():
+    if not staged.path.exists():
         sys.exit("No staged query found.")
 
-    _remove_query(staged_path)
+    _remove_query(staged)
 
 
 def _cmd_ls(_: argparse.Namespace) -> None:
@@ -517,10 +510,10 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         )
 
     while True:
-        staged_path = thread.staged_path
-        staged_path.mkdir(exist_ok=True)
+        staged = _Exchanges.Query(thread.staged_path)
+        staged.path.mkdir(exist_ok=True)
         # new line at the end to be in line with response and stick to best practices
-        (staged_path / PROMPT_PATHNAME).write_text(f"{prompt}\n")
+        staged.prompt_path.write_text(f"{prompt}\n")
 
         response = _execute_turn(
             thread,
@@ -580,9 +573,9 @@ def _format_thread_summary_line(thread: _Thread) -> str:
 
     parts.append("   ")
 
-    last_turn_path = thread.get_turn_path(turns_count - 1)
+    last_turn = _Exchanges.Turn(thread.get_turn_path(turns_count - 1))
 
-    last_prompt_path = last_turn_path / PROMPT_PATHNAME
+    last_prompt_path = last_turn.prompt_path
     if not last_prompt_path.exists():
         parts.append(f"{'':<{LS_PROMPT_LENGTH}}")
     else:
@@ -594,7 +587,7 @@ def _format_thread_summary_line(thread: _Thread) -> str:
 
     parts.append("   ")
 
-    last_response_path = last_turn_path / RESPONSE_PATHNAME
+    last_response_path = last_turn.response_path
     if not last_response_path.exists():
         parts.append(f"{'':<{LS_RESPONSE_LENGTH}}")
     else:
@@ -619,12 +612,12 @@ def _format_status(thread: _Thread) -> str:
         "",
     ]
 
-    staged_path = thread.staged_path
-    if not staged_path.exists():
+    staged = _Exchanges.Query(thread.staged_path)
+    if not staged.path.exists():
         lines.append("Nothing staged.")
         return "\n".join(lines) + "\n"
 
-    staged_lines = _format_staged(staged_path)
+    staged_lines = _format_staged(staged)
     # edit-prompt and attach both create the directory before they fill it
     if len(staged_lines) == 0:
         lines.append("Staged: empty.")
@@ -636,10 +629,10 @@ def _format_status(thread: _Thread) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _format_staged(staged_path: Path) -> list[str]:
+def _format_staged(staged: _Exchanges.Query) -> list[str]:
     lines: list[str] = []
 
-    prompt_path = staged_path / PROMPT_PATHNAME
+    prompt_path = staged.prompt_path
     if prompt_path.exists():
         prompt = _compress_text(
             _flatten_text(prompt_path.read_text()),
@@ -647,7 +640,7 @@ def _format_staged(staged_path: Path) -> list[str]:
         )
         lines.append(f"  {'prompt':<{STATUS_STAGED_LABEL_WIDTH}}{prompt}")
 
-    stdin_path = staged_path / STDIN_PATHNAME
+    stdin_path = staged.stdin_path
     if stdin_path.exists():
         lines_count = len(stdin_path.read_text().splitlines())
         plural = "" if lines_count == 1 else "s"
@@ -655,7 +648,7 @@ def _format_staged(staged_path: Path) -> list[str]:
             f"  {'stdin':<{STATUS_STAGED_LABEL_WIDTH}}{lines_count} line{plural}"
         )
 
-    attachments_path = staged_path / ATTACHMENTS_PATHNAME
+    attachments_path = staged.attachments_path
     if attachments_path.exists():
         names = sorted(p.name for p in attachments_path.iterdir())
         lines.append(
@@ -733,6 +726,40 @@ class _Thread:
 
     def get_turn_path(self, idx: int) -> Path:
         return self.path / f"{idx:02d}"
+
+
+class _Exchanges:
+    """The files of one prompt, before and after it is sent."""
+
+    @dataclass(frozen=True)
+    class _Base:
+        """What a query and a turn hold alike."""
+
+        path: Path
+
+        @property
+        def prompt_path(self) -> Path:
+            return self.path / "prompt.md"
+
+        @property
+        def stdin_path(self) -> Path:
+            return self.path / "stdin"
+
+        @property
+        def attachments_path(self) -> Path:
+            return self.path / "attachments"
+
+    @dataclass(frozen=True)
+    class Query(_Base):
+        """Staged, not sent yet."""
+
+    @dataclass(frozen=True)
+    class Turn(_Base):
+        """Sent, with the response saved beside it."""
+
+        @property
+        def response_path(self) -> Path:
+            return self.path / "response.md"
 
 
 def _get_thread(args: argparse.Namespace, threads_path: Path) -> _Thread:
@@ -1079,16 +1106,14 @@ def _flatten_text(value: str) -> str:
 def _build_history(thread: _Thread) -> list[tuple[str, list[str], str]]:
     entries: list[tuple[str, list[str], str]] = []
     for idx in range(_get_turns_count(thread)):
-        turn_path = thread.get_turn_path(idx)
-        prompt_path = turn_path / PROMPT_PATHNAME
-        response_path = turn_path / RESPONSE_PATHNAME
-        prompt = prompt_path.read_text()
-        attachments_path = turn_path / ATTACHMENTS_PATHNAME
+        turn = _Exchanges.Turn(thread.get_turn_path(idx))
+        prompt = turn.prompt_path.read_text()
+        attachments_path = turn.attachments_path
         if attachments_path.exists():
             attachments = [p.name for p in attachments_path.iterdir()]
         else:
             attachments = []
-        response = response_path.read_text()
+        response = turn.response_path.read_text()
         entries.append((prompt, attachments, response))
     return entries
 
@@ -1153,28 +1178,41 @@ def _create_thread(path: Path, *, claude_model: str, claude_tools: str) -> _Thre
 
 
 def _commit_staged(thread: _Thread, response: str) -> None:
-    turn_path = thread.get_turn_path(_get_turns_count(thread))
+    turn = _Exchanges.Turn(thread.get_turn_path(_get_turns_count(thread)))
 
-    thread.staged_path.rename(turn_path)
+    thread.staged_path.rename(turn.path)
 
-    for path in turn_path.rglob("*"):
+    for path in turn.path.rglob("*"):
         if path.is_file():
             path.chmod(0o444)
 
-    _write_read_only(turn_path / RESPONSE_PATHNAME, response)
+    _write_read_only(turn.response_path, response)
 
 
-def _remove_query(path: Path) -> None:
-    (path / PROMPT_PATHNAME).unlink(missing_ok=True)
-    (path / RESPONSE_PATHNAME).unlink(missing_ok=True)
-    (path / STDIN_PATHNAME).unlink(missing_ok=True)
+def _remove_query(query: _Exchanges.Query) -> None:
+    query.prompt_path.unlink(missing_ok=True)
+    query.stdin_path.unlink(missing_ok=True)
+    _remove_attachments(query)
+    query.path.rmdir()
 
-    attachments_path = path / ATTACHMENTS_PATHNAME
-    if attachments_path.exists():
-        for attachment_path in attachments_path.iterdir():
-            attachment_path.unlink()
-        attachments_path.rmdir()
 
+def _remove_turn(turn: _Exchanges.Turn) -> None:
+    turn.prompt_path.unlink()
+    turn.response_path.unlink()
+
+    turn.stdin_path.unlink(missing_ok=True)
+    _remove_attachments(turn)
+
+    turn.path.rmdir()
+
+
+def _remove_attachments(exchange: _Exchanges._Base) -> None:
+    path = exchange.attachments_path
+    if not path.exists():
+        return
+
+    for attachment_path in path.iterdir():
+        attachment_path.unlink()
     path.rmdir()
 
 
