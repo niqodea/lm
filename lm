@@ -25,17 +25,34 @@ if TYPE_CHECKING:
 LM_DATA_DIR_ENV = "LM_DATA_DIR"
 LM_TTY_ENV = "LM_TTY"
 
-SETTINGS_PATHNAME = "settings.toml"
-PRESETS_PATHNAME = "presets"
+INTERRUPT_EXIT_CODE = 130  # 128 + SIGINT
 
 THREADS_PATHNAME = "threads"
 TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE = ".{timestamp}-EDITMSG.md"
 
+ATTACHMENT_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+
 SCISSORS_LINE = "<!-- ------------------------ >8 ------------------------ -->"
+
+INSERT_MODE_EDITORS = {"vim", "nvim"}
+PROMPT_IS_LAST_EDITORS = {"vi", "vim", "nvim"}
+
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+
+CAPABILITY_CLAUDE_TOOLS = {"web": ("WebFetch", "WebSearch")}
 
 SYSTEM_PROMPT = """\
 You are a helpful assistant. Answer the question concisely.
 """
+
+# A failed turn reports itself as a result event with one of these subtypes.
+# Ref: https://code.claude.com/docs/en/agent-sdk/agent-loop#handle-the-result
+CLAUDE_ERROR_SUBTYPE_REASONS = {
+    "error_max_turns": "hit the turn limit",
+    "error_max_budget_usd": "hit the budget limit",
+    "error_during_execution": "an error interrupted the run",
+    "error_max_structured_output_retries": "never got valid structured output",
+}
 
 PROMPT_SUMMARY_MAX_LENGTH = 100
 
@@ -47,27 +64,12 @@ LS_RESPONSE_LENGTH = 50
 STATUS_LABEL_WIDTH = 8
 STATUS_STAGED_LABEL_WIDTH = 14
 
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
-
-INSERT_MODE_EDITORS = {"vim", "nvim"}
-PROMPT_IS_LAST_EDITORS = {"vi", "vim", "nvim"}
-
+SETTINGS_PATHNAME = "settings.toml"
+PRESETS_PATHNAME = "presets"
 SETTINGS_CHAR_DELAY_KEY = "char_delay"
 
-CAPABILITY_CLAUDE_TOOLS = {"web": ("WebFetch", "WebSearch")}
 
-# A failed turn reports itself as a result event with one of these subtypes.
-# Ref: https://code.claude.com/docs/en/agent-sdk/agent-loop#handle-the-result
-CLAUDE_ERROR_SUBTYPE_REASONS = {
-    "error_max_turns": "hit the turn limit",
-    "error_max_budget_usd": "hit the budget limit",
-    "error_during_execution": "an error interrupted the run",
-    "error_max_structured_output_retries": "never got valid structured output",
-}
-
-ATTACHMENT_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
-
-INTERRUPT_EXIT_CODE = 130  # 128 + SIGINT
+# --- commands
 
 
 def main() -> None:
@@ -484,134 +486,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
             return
 
 
-# ---
-
-
-def _write_paged(content: str) -> None:
-    if not sys.stdout.isatty():
-        sys.stdout.write(content)
-        return
-
-    pager = os.getenv("PAGER", "less")
-    env = os.environ.copy()
-    env.setdefault("LESS", "-FRX")
-    with subprocess.Popen(  # noqa: S603  (running the user pager expected to be safe)
-        pager,
-        stdin=subprocess.PIPE,
-        text=True,
-        env=env,
-    ) as pager_proc:
-        if pager_proc.stdin is None:
-            sys.exit("Unexpected error: Pager standard input not captured")
-        pager_proc.stdin.write(content)
-
-
-def _format_threads_summary(threads: list[_Thread]) -> str:
-    return "".join(f"{_format_thread_summary_line(thread)}\n" for thread in threads)
-
-
-def _format_thread_summary_line(thread: _Thread) -> str:
-    name = _compress_text(thread.name, max_length=LS_NAME_LENGTH)
-    turns_count = _get_turns_count(thread)
-
-    header = f"{name:<{LS_NAME_LENGTH}}   {turns_count:{LS_TURNS_COUNT_WIDTH}d}t"
-    if turns_count == 0:
-        return header
-
-    last_turn = _Exchanges.Turn(thread.get_turn_path(turns_count - 1))
-    prompt = _summarize_text(
-        last_turn.prompt_path.read_text(), max_length=LS_PROMPT_LENGTH
-    )
-    response = _summarize_text(
-        last_turn.response_path.read_text(), max_length=LS_RESPONSE_LENGTH
-    )
-
-    return f"{header}   {prompt:<{LS_PROMPT_LENGTH}}   {response:<{LS_RESPONSE_LENGTH}}"
-
-
-def _format_status(thread: _Thread) -> str:
-    claude_tools = thread.tools_path.read_text()
-    tools = "none" if claude_tools == "" else ", ".join(claude_tools.split(","))
-
-    lines = [
-        f"{'Thread:':<{STATUS_LABEL_WIDTH}}{thread.name}",
-        f"{'Model:':<{STATUS_LABEL_WIDTH}}{thread.model_path.read_text()}",
-        f"{'Tools:':<{STATUS_LABEL_WIDTH}}{tools}",
-        f"{'Turns:':<{STATUS_LABEL_WIDTH}}{_get_turns_count(thread)}",
-        "",
-    ]
-
-    staged = _Exchanges.Query(thread.staged_path)
-    if not staged.path.exists():
-        lines.append("Nothing staged.")
-        return "\n".join(lines) + "\n"
-
-    staged_lines = _format_staged(staged)
-    # edit-prompt and attach both create the directory before they fill it
-    if len(staged_lines) == 0:
-        lines.append("Staged: empty.")
-        return "\n".join(lines) + "\n"
-
-    lines.append("Staged:")
-    lines.extend(staged_lines)
-
-    return "\n".join(lines) + "\n"
-
-
-def _format_staged(staged: _Exchanges.Query) -> list[str]:
-    lines: list[str] = []
-
-    prompt_path = staged.prompt_path
-    if prompt_path.exists():
-        prompt = _summarize_text(
-            prompt_path.read_text(), max_length=PROMPT_SUMMARY_MAX_LENGTH
-        )
-        lines.append(f"  {'prompt':<{STATUS_STAGED_LABEL_WIDTH}}{prompt}")
-
-    stdin_path = staged.stdin_path
-    if stdin_path.exists():
-        lines_count = len(stdin_path.read_text().splitlines())
-        plural = "" if lines_count == 1 else "s"
-        lines.append(
-            f"  {'stdin':<{STATUS_STAGED_LABEL_WIDTH}}{lines_count} line{plural}"
-        )
-
-    attachments_path = staged.attachments_path
-    if attachments_path.exists():
-        names = sorted(p.name for p in attachments_path.iterdir())
-        lines.append(
-            f"  {'attachments':<{STATUS_STAGED_LABEL_WIDTH}}{', '.join(names)}"
-        )
-
-    return lines
-
-
-# ---
-
-
-def _add_thread_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
-    group = parser.add_mutually_exclusive_group(required=required)
-    group.add_argument(
-        "-t",
-        "--thread",
-        help="Thread name.",
-    )
-    group.add_argument(
-        "-l",
-        "--last",
-        action="store_true",
-        help="Use the last active thread.",
-    )
-    group.add_argument(
-        "-s",
-        "--select",
-        action="store_true",
-        help="Pick a thread interactively.",
-    )
-
-
-def _has_thread_arg(args: argparse.Namespace) -> bool:
-    return args.thread is not None or args.last is True or args.select is True
+# --- threads
 
 
 @dataclass(frozen=True)
@@ -656,47 +531,29 @@ class _Thread:
         return self.path / f"{idx:02d}"
 
 
-class _Exchanges:
-    """The files of one prompt, before and after it is sent."""
-
-    @dataclass(frozen=True)
-    class _Base:
-        """What a query and a turn hold alike."""
-
-        path: Path
-
-        @property
-        def prompt_path(self) -> Path:
-            return self.path / "prompt.md"
-
-        @property
-        def stdin_path(self) -> Path:
-            return self.path / "stdin"
-
-        @property
-        def attachments_path(self) -> Path:
-            return self.path / "attachments"
-
-    @dataclass(frozen=True)
-    class Query(_Base):
-        """Staged, not sent yet."""
-
-    @dataclass(frozen=True)
-    class Turn(_Base):
-        """Sent, with the response saved beside it."""
-
-        @property
-        def response_path(self) -> Path:
-            return self.path / "response.md"
+def _add_thread_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
+    group = parser.add_mutually_exclusive_group(required=required)
+    group.add_argument(
+        "-t",
+        "--thread",
+        help="Thread name.",
+    )
+    group.add_argument(
+        "-l",
+        "--last",
+        action="store_true",
+        help="Use the last active thread.",
+    )
+    group.add_argument(
+        "-s",
+        "--select",
+        action="store_true",
+        help="Pick a thread interactively.",
+    )
 
 
-@dataclass(frozen=True)
-class _HistoryEntry:
-    """One past exchange, as the editor shows it back."""
-
-    prompt: str
-    attachment_names: list[str]
-    response: str
+def _has_thread_arg(args: argparse.Namespace) -> bool:
+    return args.thread is not None or args.last is True or args.select is True
 
 
 def _get_thread(args: argparse.Namespace, threads_path: Path) -> _Thread:
@@ -751,6 +608,174 @@ def _get_threads(threads_path: Path) -> list[_Thread]:
         reverse=True,
     )
     return [_Thread(p) for p in paths]
+
+
+def _create_thread(path: Path, *, claude_model: str, claude_tools: str) -> _Thread:
+    thread = _Thread(path)
+
+    thread.path.mkdir()
+    thread.claude_path.mkdir()
+    thread.scratch_cwd_path.mkdir()
+
+    # We tie these to the thread for simplicity and not to bust cache
+    _write_read_only(thread.model_path, claude_model)
+    _write_read_only(thread.tools_path, claude_tools)
+
+    return thread
+
+
+def _get_turns_count(thread: _Thread) -> int:
+    idx = 0
+    while thread.get_turn_path(idx).exists():
+        idx += 1
+    return idx
+
+
+def _assert_thread_name_is_valid(name: str) -> None:
+    if name == "" or name in {".", ".."} or name.startswith(".") or "/" in name:
+        sys.exit(f"Invalid thread name: {name}")
+
+
+def _assert_thread_exists(path: Path) -> None:
+    if not path.exists():
+        sys.exit("Thread does not exist.")
+
+
+def _assert_thread_doesnt_exist(path: Path) -> None:
+    if path.exists():
+        sys.exit("Thread already exists.")
+
+
+def _assert_no_staged_query(thread: _Thread) -> None:
+    if thread.staged_path.exists():
+        sys.exit(
+            f"Staged query already exists in thread '{thread.name}'.\n"
+            f"  See it with:     lm status -t {thread.name}\n"
+            f"  Send it with:    lm commit -t {thread.name}\n"
+            f"  Discard it with: lm clear -t {thread.name}"
+        )
+
+
+# --- exchanges
+
+
+class _Exchanges:
+    """The files of one prompt, before and after it is sent."""
+
+    @dataclass(frozen=True)
+    class _Base:
+        """What a query and a turn hold alike."""
+
+        path: Path
+
+        @property
+        def prompt_path(self) -> Path:
+            return self.path / "prompt.md"
+
+        @property
+        def stdin_path(self) -> Path:
+            return self.path / "stdin"
+
+        @property
+        def attachments_path(self) -> Path:
+            return self.path / "attachments"
+
+    @dataclass(frozen=True)
+    class Query(_Base):
+        """Staged, not sent yet."""
+
+    @dataclass(frozen=True)
+    class Turn(_Base):
+        """Sent, with the response saved beside it."""
+
+        @property
+        def response_path(self) -> Path:
+            return self.path / "response.md"
+
+
+def _write_prompt(query: _Exchanges.Query, prompt: str) -> None:
+    # new line at the end to be in line with response and stick to best practices
+    query.prompt_path.write_text(f"{prompt}\n")
+
+
+def _commit_staged(thread: _Thread, response: str) -> None:
+    turn = _Exchanges.Turn(thread.get_turn_path(_get_turns_count(thread)))
+
+    thread.staged_path.rename(turn.path)
+
+    for path in turn.path.rglob("*"):
+        if path.is_file():
+            path.chmod(0o444)
+
+    _write_read_only(turn.response_path, response)
+
+
+def _remove_query(query: _Exchanges.Query) -> None:
+    query.prompt_path.unlink(missing_ok=True)
+    query.stdin_path.unlink(missing_ok=True)
+    _remove_attachments(query)
+    query.path.rmdir()
+
+
+def _remove_turn(turn: _Exchanges.Turn) -> None:
+    turn.prompt_path.unlink()
+    turn.response_path.unlink()
+
+    turn.stdin_path.unlink(missing_ok=True)
+    _remove_attachments(turn)
+
+    turn.path.rmdir()
+
+
+def _remove_attachments(exchange: _Exchanges._Base) -> None:
+    path = exchange.attachments_path
+    if not path.exists():
+        return
+
+    for attachment_path in path.iterdir():
+        attachment_path.unlink()
+    path.rmdir()
+
+
+# --- attachments
+
+
+def _get_attachment(arg: str) -> tuple[Path, str]:
+    if ":" not in arg:
+        path = Path(arg)
+        alias = path.name
+    else:
+        path_str, alias = arg.rsplit(":", 1)
+        path = Path(path_str)
+    if not alias:
+        sys.exit(f"Attachment alias is empty: {arg}")
+    if not path.exists():
+        sys.exit(f"Attachment not found: {path}")
+    if path.is_dir():
+        sys.exit(f"Attachment is a directory: {path}")
+    if path.stat().st_size > ATTACHMENT_MAX_SIZE_BYTES:
+        sys.exit(f"Attachment too large: {path}")
+    return path, alias
+
+
+def _write_attachments(attachments: list[tuple[Path, str]], path: Path) -> None:
+    for source_path, alias in attachments:
+        alias_path = path / alias
+        if alias_path.exists():
+            sys.exit(f"Attachment already exists with alias '{alias}'")
+        source_path.copy(alias_path)
+
+
+# --- prompts and history
+
+
+@dataclass(frozen=True)
+class _HistoryEntry:
+    """One past exchange, as the editor shows it back."""
+
+    prompt: str
+    attachment_names: list[str]
+    response: str
 
 
 def _resolve_thread_and_prompt(
@@ -865,6 +890,28 @@ def _format_history(history: list[_HistoryEntry]) -> list[str]:
         components.append(prompt_component)
         components.append(response_component)
     return components
+
+
+def _build_history(thread: _Thread) -> list[_HistoryEntry]:
+    entries: list[_HistoryEntry] = []
+    for idx in range(_get_turns_count(thread)):
+        turn = _Exchanges.Turn(thread.get_turn_path(idx))
+        attachments_path = turn.attachments_path
+        if attachments_path.exists():
+            attachment_names = [p.name for p in attachments_path.iterdir()]
+        else:
+            attachment_names = []
+        entries.append(
+            _HistoryEntry(
+                prompt=turn.prompt_path.read_text(),
+                attachment_names=attachment_names,
+                response=turn.response_path.read_text(),
+            )
+        )
+    return entries
+
+
+# --- inference
 
 
 def _execute_turn(
@@ -1013,206 +1060,6 @@ def _format_inference_failure(*, detail: str, thread_name: str) -> str:
     )
 
 
-def _get_turns_count(thread: _Thread) -> int:
-    idx = 0
-    while thread.get_turn_path(idx).exists():
-        idx += 1
-    return idx
-
-
-def _get_preset(name: str, config_path: Path) -> str:
-    presets_path = config_path / PRESETS_PATHNAME
-    path = presets_path / f"{name}.md"
-    if not path.exists():
-        sys.exit(f"Preset not found: {path}")
-    return path.read_text()
-
-
-def _get_attachment(arg: str) -> tuple[Path, str]:
-    if ":" not in arg:
-        path = Path(arg)
-        alias = path.name
-    else:
-        path_str, alias = arg.rsplit(":", 1)
-        path = Path(path_str)
-    if not alias:
-        sys.exit(f"Attachment alias is empty: {arg}")
-    if not path.exists():
-        sys.exit(f"Attachment not found: {path}")
-    if path.is_dir():
-        sys.exit(f"Attachment is a directory: {path}")
-    if path.stat().st_size > ATTACHMENT_MAX_SIZE_BYTES:
-        sys.exit(f"Attachment too large: {path}")
-    return path, alias
-
-
-def _write_prompt(query: _Exchanges.Query, prompt: str) -> None:
-    # new line at the end to be in line with response and stick to best practices
-    query.prompt_path.write_text(f"{prompt}\n")
-
-
-def _write_attachments(attachments: list[tuple[Path, str]], path: Path) -> None:
-    for source_path, alias in attachments:
-        alias_path = path / alias
-        if alias_path.exists():
-            sys.exit(f"Attachment already exists with alias '{alias}'")
-        source_path.copy(alias_path)
-
-
-def _summarize_text(value: str, *, max_length: int) -> str:
-    return _compress_text(" ".join(value.split()), max_length=max_length)
-
-
-def _compress_text(value: str, max_length: int) -> str:
-    if len(value) <= max_length:
-        return value
-    left = max_length // 2
-    right = max_length - left - 3
-    return f"{value[:left]}...{value[-right:]}"
-
-
-def _build_history(thread: _Thread) -> list[_HistoryEntry]:
-    entries: list[_HistoryEntry] = []
-    for idx in range(_get_turns_count(thread)):
-        turn = _Exchanges.Turn(thread.get_turn_path(idx))
-        attachments_path = turn.attachments_path
-        if attachments_path.exists():
-            attachment_names = [p.name for p in attachments_path.iterdir()]
-        else:
-            attachment_names = []
-        entries.append(
-            _HistoryEntry(
-                prompt=turn.prompt_path.read_text(),
-                attachment_names=attachment_names,
-                response=turn.response_path.read_text(),
-            )
-        )
-    return entries
-
-
-def _get_char_delay_from_settings(config_path: Path) -> float:
-    settings_path = config_path / SETTINGS_PATHNAME
-    settings = tomllib.loads(settings_path.read_text())
-    char_delay = settings.get(SETTINGS_CHAR_DELAY_KEY, 0.0)
-    if not isinstance(char_delay, float):
-        sys.exit(f"Setting {SETTINGS_CHAR_DELAY_KEY} must be a float: {char_delay}")
-    return char_delay
-
-
-def _get_config_path(*, missing_ok: bool) -> Path:
-    if (xdg_config_home := os.environ.get("XDG_CONFIG_HOME")) is not None:
-        config_home_path = Path(xdg_config_home)
-    else:
-        config_home_path = Path.home() / ".config"
-
-    path = config_home_path / "lm"
-
-    if not missing_ok and not path.exists():
-        sys.exit(f"Config directory not found: {path}\nRun `lm init` to initialize it.")
-
-    return path
-
-
-def _get_data_path(*, missing_ok: bool) -> Path:
-    if (lm_data_dir := os.environ.get(LM_DATA_DIR_ENV)) is not None:
-        path = Path(lm_data_dir)
-    else:
-        if (xdg_data_home := os.environ.get("XDG_DATA_HOME")) is not None:
-            data_home_path = Path(xdg_data_home)
-        else:
-            data_home_path = Path.home() / ".local/share"
-        path = data_home_path / "lm"
-
-    if not missing_ok and not path.exists():
-        sys.exit(f"Data directory not found: {path}\nRun `lm init` to initialize it.")
-
-    return path
-
-
-def _write_read_only(path: Path, content: str) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
-    with os.fdopen(fd, "w") as f:
-        f.write(content)
-
-
-def _create_thread(path: Path, *, claude_model: str, claude_tools: str) -> _Thread:
-    thread = _Thread(path)
-
-    thread.path.mkdir()
-    thread.claude_path.mkdir()
-    thread.scratch_cwd_path.mkdir()
-
-    # We tie these to the thread for simplicity and not to bust cache
-    _write_read_only(thread.model_path, claude_model)
-    _write_read_only(thread.tools_path, claude_tools)
-
-    return thread
-
-
-def _commit_staged(thread: _Thread, response: str) -> None:
-    turn = _Exchanges.Turn(thread.get_turn_path(_get_turns_count(thread)))
-
-    thread.staged_path.rename(turn.path)
-
-    for path in turn.path.rglob("*"):
-        if path.is_file():
-            path.chmod(0o444)
-
-    _write_read_only(turn.response_path, response)
-
-
-def _remove_query(query: _Exchanges.Query) -> None:
-    query.prompt_path.unlink(missing_ok=True)
-    query.stdin_path.unlink(missing_ok=True)
-    _remove_attachments(query)
-    query.path.rmdir()
-
-
-def _remove_turn(turn: _Exchanges.Turn) -> None:
-    turn.prompt_path.unlink()
-    turn.response_path.unlink()
-
-    turn.stdin_path.unlink(missing_ok=True)
-    _remove_attachments(turn)
-
-    turn.path.rmdir()
-
-
-def _remove_attachments(exchange: _Exchanges._Base) -> None:
-    path = exchange.attachments_path
-    if not path.exists():
-        return
-
-    for attachment_path in path.iterdir():
-        attachment_path.unlink()
-    path.rmdir()
-
-
-def _assert_thread_name_is_valid(name: str) -> None:
-    if name == "" or name in {".", ".."} or name.startswith(".") or "/" in name:
-        sys.exit(f"Invalid thread name: {name}")
-
-
-def _assert_thread_exists(path: Path) -> None:
-    if not path.exists():
-        sys.exit("Thread does not exist.")
-
-
-def _assert_thread_doesnt_exist(path: Path) -> None:
-    if path.exists():
-        sys.exit("Thread already exists.")
-
-
-def _assert_no_staged_query(thread: _Thread) -> None:
-    if thread.staged_path.exists():
-        sys.exit(
-            f"Staged query already exists in thread '{thread.name}'.\n"
-            f"  See it with:     lm status -t {thread.name}\n"
-            f"  Send it with:    lm commit -t {thread.name}\n"
-            f"  Discard it with: lm clear -t {thread.name}"
-        )
-
-
 def _resolve_claude_tools(capabilities: list[str]) -> str:
     return ",".join(t for c in capabilities for t in CAPABILITY_CLAUDE_TOOLS[c])
 
@@ -1282,6 +1129,179 @@ class _ClaudeContext:
 
         for path in self._scratch_cwd_path.iterdir():
             path.unlink()
+
+
+# --- output
+
+
+def _write_paged(content: str) -> None:
+    if not sys.stdout.isatty():
+        sys.stdout.write(content)
+        return
+
+    pager = os.getenv("PAGER", "less")
+    env = os.environ.copy()
+    env.setdefault("LESS", "-FRX")
+    with subprocess.Popen(  # noqa: S603  (running the user pager expected to be safe)
+        pager,
+        stdin=subprocess.PIPE,
+        text=True,
+        env=env,
+    ) as pager_proc:
+        if pager_proc.stdin is None:
+            sys.exit("Unexpected error: Pager standard input not captured")
+        pager_proc.stdin.write(content)
+
+
+def _format_threads_summary(threads: list[_Thread]) -> str:
+    return "".join(f"{_format_thread_summary_line(thread)}\n" for thread in threads)
+
+
+def _format_thread_summary_line(thread: _Thread) -> str:
+    name = _compress_text(thread.name, max_length=LS_NAME_LENGTH)
+    turns_count = _get_turns_count(thread)
+
+    header = f"{name:<{LS_NAME_LENGTH}}   {turns_count:{LS_TURNS_COUNT_WIDTH}d}t"
+    if turns_count == 0:
+        return header
+
+    last_turn = _Exchanges.Turn(thread.get_turn_path(turns_count - 1))
+    prompt = _summarize_text(
+        last_turn.prompt_path.read_text(), max_length=LS_PROMPT_LENGTH
+    )
+    response = _summarize_text(
+        last_turn.response_path.read_text(), max_length=LS_RESPONSE_LENGTH
+    )
+
+    return f"{header}   {prompt:<{LS_PROMPT_LENGTH}}   {response:<{LS_RESPONSE_LENGTH}}"
+
+
+def _format_status(thread: _Thread) -> str:
+    claude_tools = thread.tools_path.read_text()
+    tools = "none" if claude_tools == "" else ", ".join(claude_tools.split(","))
+
+    lines = [
+        f"{'Thread:':<{STATUS_LABEL_WIDTH}}{thread.name}",
+        f"{'Model:':<{STATUS_LABEL_WIDTH}}{thread.model_path.read_text()}",
+        f"{'Tools:':<{STATUS_LABEL_WIDTH}}{tools}",
+        f"{'Turns:':<{STATUS_LABEL_WIDTH}}{_get_turns_count(thread)}",
+        "",
+    ]
+
+    staged = _Exchanges.Query(thread.staged_path)
+    if not staged.path.exists():
+        lines.append("Nothing staged.")
+        return "\n".join(lines) + "\n"
+
+    staged_lines = _format_staged(staged)
+    # edit-prompt and attach both create the directory before they fill it
+    if len(staged_lines) == 0:
+        lines.append("Staged: empty.")
+        return "\n".join(lines) + "\n"
+
+    lines.append("Staged:")
+    lines.extend(staged_lines)
+
+    return "\n".join(lines) + "\n"
+
+
+def _format_staged(staged: _Exchanges.Query) -> list[str]:
+    lines: list[str] = []
+
+    prompt_path = staged.prompt_path
+    if prompt_path.exists():
+        prompt = _summarize_text(
+            prompt_path.read_text(), max_length=PROMPT_SUMMARY_MAX_LENGTH
+        )
+        lines.append(f"  {'prompt':<{STATUS_STAGED_LABEL_WIDTH}}{prompt}")
+
+    stdin_path = staged.stdin_path
+    if stdin_path.exists():
+        lines_count = len(stdin_path.read_text().splitlines())
+        plural = "" if lines_count == 1 else "s"
+        lines.append(
+            f"  {'stdin':<{STATUS_STAGED_LABEL_WIDTH}}{lines_count} line{plural}"
+        )
+
+    attachments_path = staged.attachments_path
+    if attachments_path.exists():
+        names = sorted(p.name for p in attachments_path.iterdir())
+        lines.append(
+            f"  {'attachments':<{STATUS_STAGED_LABEL_WIDTH}}{', '.join(names)}"
+        )
+
+    return lines
+
+
+def _summarize_text(value: str, *, max_length: int) -> str:
+    return _compress_text(" ".join(value.split()), max_length=max_length)
+
+
+def _compress_text(value: str, max_length: int) -> str:
+    if len(value) <= max_length:
+        return value
+    left = max_length // 2
+    right = max_length - left - 3
+    return f"{value[:left]}...{value[-right:]}"
+
+
+# --- config and data
+
+
+def _get_config_path(*, missing_ok: bool) -> Path:
+    if (xdg_config_home := os.environ.get("XDG_CONFIG_HOME")) is not None:
+        config_home_path = Path(xdg_config_home)
+    else:
+        config_home_path = Path.home() / ".config"
+
+    path = config_home_path / "lm"
+
+    if not missing_ok and not path.exists():
+        sys.exit(f"Config directory not found: {path}\nRun `lm init` to initialize it.")
+
+    return path
+
+
+def _get_data_path(*, missing_ok: bool) -> Path:
+    if (lm_data_dir := os.environ.get(LM_DATA_DIR_ENV)) is not None:
+        path = Path(lm_data_dir)
+    else:
+        if (xdg_data_home := os.environ.get("XDG_DATA_HOME")) is not None:
+            data_home_path = Path(xdg_data_home)
+        else:
+            data_home_path = Path.home() / ".local/share"
+        path = data_home_path / "lm"
+
+    if not missing_ok and not path.exists():
+        sys.exit(f"Data directory not found: {path}\nRun `lm init` to initialize it.")
+
+    return path
+
+
+def _get_preset(name: str, config_path: Path) -> str:
+    presets_path = config_path / PRESETS_PATHNAME
+    path = presets_path / f"{name}.md"
+    if not path.exists():
+        sys.exit(f"Preset not found: {path}")
+    return path.read_text()
+
+
+def _get_char_delay_from_settings(config_path: Path) -> float:
+    settings_path = config_path / SETTINGS_PATHNAME
+    settings = tomllib.loads(settings_path.read_text())
+    char_delay = settings.get(SETTINGS_CHAR_DELAY_KEY, 0.0)
+    if not isinstance(char_delay, float):
+        sys.exit(f"Setting {SETTINGS_CHAR_DELAY_KEY} must be a float: {char_delay}")
+    return char_delay
+
+
+def _write_read_only(path: Path, content: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
+
+
+# --- entrypoint
 
 
 if __name__ == "__main__":
