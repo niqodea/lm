@@ -16,7 +16,6 @@ import time
 import tomllib
 import uuid
 from dataclasses import dataclass
-from itertools import count
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -424,14 +423,7 @@ def _cmd_ls(_: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    paths = sorted(
-        (p for p in threads_path.iterdir() if p.is_dir()),
-        # NOTE: Not a super robust way to sort by last activity, but simple and works
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-
-    _write_paged(_format_threads_summary([_Thread(p) for p in paths]))
+    _write_paged(_format_threads_summary(_get_threads(threads_path)))
 
 
 def _cmd_show(args: argparse.Namespace) -> None:
@@ -517,45 +509,22 @@ def _format_threads_summary(threads: list[_Thread]) -> str:
 
 
 def _format_thread_summary_line(thread: _Thread) -> str:
-    parts: list[str] = []
-
-    name = thread.name
-    parts.append(f"{_compress_text(name, max_length=LS_NAME_LENGTH):<{LS_NAME_LENGTH}}")
-    parts.append("   ")
-
+    name = _compress_text(thread.name, max_length=LS_NAME_LENGTH)
     turns_count = _get_turns_count(thread)
-    parts.append(f"{turns_count:{LS_TURNS_COUNT_WIDTH}d}t")
 
+    header = f"{name:<{LS_NAME_LENGTH}}   {turns_count:{LS_TURNS_COUNT_WIDTH}d}t"
     if turns_count == 0:
-        return "".join(parts)
-
-    parts.append("   ")
+        return header
 
     last_turn = _Exchanges.Turn(thread.get_turn_path(turns_count - 1))
+    prompt = _summarize_text(
+        last_turn.prompt_path.read_text(), max_length=LS_PROMPT_LENGTH
+    )
+    response = _summarize_text(
+        last_turn.response_path.read_text(), max_length=LS_RESPONSE_LENGTH
+    )
 
-    last_prompt_path = last_turn.prompt_path
-    if not last_prompt_path.exists():
-        parts.append(f"{'':<{LS_PROMPT_LENGTH}}")
-    else:
-        last_prompt = _compress_text(
-            _flatten_text(last_prompt_path.read_text()),
-            max_length=LS_PROMPT_LENGTH,
-        )
-        parts.append(f"{last_prompt:<{LS_PROMPT_LENGTH}}")
-
-    parts.append("   ")
-
-    last_response_path = last_turn.response_path
-    if not last_response_path.exists():
-        parts.append(f"{'':<{LS_RESPONSE_LENGTH}}")
-    else:
-        last_response = _compress_text(
-            _flatten_text(last_response_path.read_text()),
-            max_length=LS_RESPONSE_LENGTH,
-        )
-        parts.append(f"{last_response:<{LS_RESPONSE_LENGTH}}")
-
-    return "".join(parts)
+    return f"{header}   {prompt:<{LS_PROMPT_LENGTH}}   {response:<{LS_RESPONSE_LENGTH}}"
 
 
 def _format_status(thread: _Thread) -> str:
@@ -592,9 +561,8 @@ def _format_staged(staged: _Exchanges.Query) -> list[str]:
 
     prompt_path = staged.prompt_path
     if prompt_path.exists():
-        prompt = _compress_text(
-            _flatten_text(prompt_path.read_text()),
-            max_length=PROMPT_SUMMARY_MAX_LENGTH,
+        prompt = _summarize_text(
+            prompt_path.read_text(), max_length=PROMPT_SUMMARY_MAX_LENGTH
         )
         lines.append(f"  {'prompt':<{STATUS_STAGED_LABEL_WIDTH}}{prompt}")
 
@@ -724,10 +692,10 @@ def _get_thread(args: argparse.Namespace, threads_path: Path) -> _Thread:
     if isinstance(args.thread, str):
         thread_name = args.thread
     elif args.last is True:
-        names = _get_threads(threads_path)
-        if not names:
+        threads = _get_threads(threads_path)
+        if not threads:
             sys.exit("No threads found.")
-        thread_name = names[0]
+        thread_name = threads[0].name
     elif args.select is True:
         thread_name = _select_thread(threads_path)
     else:
@@ -743,12 +711,12 @@ def _get_thread(args: argparse.Namespace, threads_path: Path) -> _Thread:
 
 
 def _select_thread(threads_path: Path) -> str:
-    names = _get_threads(threads_path)
-    if not names:
+    threads = _get_threads(threads_path)
+    if not threads:
         sys.exit("No threads found.")
 
     summary_to_name = {
-        _format_thread_summary_line(_Thread(threads_path / n)): n for n in names
+        _format_thread_summary_line(thread): thread.name for thread in threads
     }
 
     result = subprocess.run(
@@ -764,13 +732,14 @@ def _select_thread(threads_path: Path) -> str:
     return summary_to_name[result.stdout.rstrip("\n")]
 
 
-def _get_threads(threads_path: Path) -> list[str]:
+def _get_threads(threads_path: Path) -> list[_Thread]:
     paths = sorted(
-        [p for p in threads_path.iterdir() if p.is_dir()],
+        (p for p in threads_path.iterdir() if p.is_dir()),
+        # NOTE: Not a super robust way to sort by last activity, but simple and works
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    return [p.name for p in paths]
+    return [_Thread(p) for p in paths]
 
 
 def _resolve_thread_and_prompt(
@@ -898,9 +867,7 @@ def _execute_turn(
     attachments_path: Path | None,
     char_delay: float,
 ) -> str:
-    prompt_summary = _compress_text(
-        _flatten_text(prompt), max_length=PROMPT_SUMMARY_MAX_LENGTH
-    )
+    prompt_summary = _summarize_text(prompt, max_length=PROMPT_SUMMARY_MAX_LENGTH)
     claude_tools = thread.tools_path.read_text()
 
     with _ClaudeContext.create(
@@ -1039,10 +1006,10 @@ def _format_inference_failure(*, detail: str, thread_name: str) -> str:
 
 
 def _get_turns_count(thread: _Thread) -> int:
-    for idx in count():
-        if not thread.get_turn_path(idx).exists():
-            return idx
-    raise AssertionError("Unreachable")
+    idx = 0
+    while thread.get_turn_path(idx).exists():
+        idx += 1
+    return idx
 
 
 def _get_preset(name: str, config_path: Path) -> str:
@@ -1084,16 +1051,16 @@ def _write_attachments(attachments: list[tuple[Path, str]], path: Path) -> None:
         source_path.copy(alias_path)
 
 
+def _summarize_text(value: str, *, max_length: int) -> str:
+    return _compress_text(" ".join(value.split()), max_length=max_length)
+
+
 def _compress_text(value: str, max_length: int) -> str:
     if len(value) <= max_length:
         return value
     left = max_length // 2
     right = max_length - left - 3
     return f"{value[:left]}...{value[-right:]}"
-
-
-def _flatten_text(value: str) -> str:
-    return " ".join(value.split())
 
 
 def _build_history(thread: _Thread) -> list[tuple[str, list[str], str]]:
