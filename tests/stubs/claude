@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -15,6 +16,21 @@ def main() -> None:
     """Record the call lm made, then play the one run the test scripted."""
     Path(os.environ[protocol.CLAUDE_ARGV_ENV]).write_text(json.dumps(sys.argv[1:]))
     Path(os.environ[protocol.CLAUDE_STDIN_ENV]).write_text(sys.stdin.read())
+
+    if "--session-id" in sys.argv:
+        session_id = sys.argv[sys.argv.index("--session-id") + 1]
+        project_name = re.sub(r"[^a-zA-Z0-9]", "-", str(Path.cwd()))
+        project_path = Path.home() / ".claude" / "projects" / project_name
+        project_path.mkdir(parents=True, exist_ok=True)
+        # Nothing reads the session, so it stays empty. Real contents would mean
+        # modeling what claude stores, which is a second implementation to keep
+        # honest. Not worth it.
+        (project_path / f"{session_id}.jsonl").touch()
+    elif "--resume" in sys.argv:
+        # Resuming, so lm has already linked the session into place
+        pass
+    else:
+        sys.exit("Expected --session-id or --resume in the claude call")
 
     script = json.loads(Path(os.environ[protocol.CLAUDE_SCRIPT_ENV]).read_text())
 

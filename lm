@@ -1094,6 +1094,9 @@ class _ClaudeContext:
         )
 
     def __enter__(self) -> tuple[tuple[str, str], str | None]:
+        self._projects_path.mkdir(parents=True, exist_ok=True)
+        self._project_path.mkdir()
+
         if not self._session_path.exists():
             flag = "--session-id"
         else:
@@ -1127,8 +1130,18 @@ class _ClaudeContext:
         elif self._session_expected_path.exists():
             self._session_expected_path.rename(self._session_path)
 
+        self._project_path.rmdir()
+
         for path in self._scratch_cwd_path.iterdir():
             path.unlink()
+
+    @property
+    def _project_path(self) -> Path:
+        return self._session_expected_path.parent
+
+    @property
+    def _projects_path(self) -> Path:
+        return self._project_path.parent
 
 
 # --- output

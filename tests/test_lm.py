@@ -104,6 +104,22 @@ def test_rename_changes_a_thread_name(lm: Lm) -> None:
     assert (lm.get_turn_path("after", 0) / "prompt.md").read_text() == "what is 2+2?\n"
 
 
+def test_rename_allows_another_turn(lm: Lm) -> None:
+    lm.set_claude_response("an answer")
+
+    lm.invoke("new", "before", stdin="")
+    lm.set_editor_prompt("first question\n")
+    lm.invoke("run", "--thread", "before", stdin="")
+    lm.invoke("rename", "--thread", "before", "after", stdin="")
+    lm.set_editor_prompt("second question\n")
+    result = lm.invoke("run", "--thread", "after", stdin="")
+
+    assert result.returncode == 0
+    assert (
+        lm.get_turn_path("after", 1) / "prompt.md"
+    ).read_text() == "second question\n"
+
+
 def test_rm_deletes_a_thread(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_response("4")
@@ -270,6 +286,18 @@ def test_past_turns_are_not_resent_to_claude(lm: Lm) -> None:
 
     # The session carries the history, so only the new prompt is sent
     assert "first question" not in lm.get_claude_prompt()
+
+
+def test_a_second_turn_resumes_the_session(lm: Lm) -> None:
+    lm.set_claude_response("an answer")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.set_editor_prompt("first question\n")
+    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.set_editor_prompt("second question\n")
+    lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert "--resume" in lm.get_claude_argv()
 
 
 def test_chat_runs_each_queued_prompt_as_a_turn(lm: Lm) -> None:
