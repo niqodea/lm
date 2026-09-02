@@ -14,56 +14,56 @@ ERROR_RETURNCODE = 1
 
 def main() -> None:
     """Record the call lm made, then play the one run the test scripted."""
+    prompt = sys.argv[1]
     Path(os.environ[protocol.CLAUDE_ARGV_ENV]).write_text(json.dumps(sys.argv[1:]))
     Path(os.environ[protocol.CLAUDE_STDIN_ENV]).write_text(sys.stdin.read())
 
     if "--session-id" in sys.argv:
         session_id = sys.argv[sys.argv.index("--session-id") + 1]
-        project_name = re.sub(r"[^a-zA-Z0-9]", "-", str(Path.cwd()))
-        project_path = Path.home() / ".claude" / "projects" / project_name
-        project_path.mkdir(parents=True, exist_ok=True)
-        # Nothing reads the session, so it stays empty. Real contents would mean
-        # modeling what claude stores, which is a second implementation to keep
-        # honest. Not worth it.
-        (project_path / f"{session_id}.jsonl").touch()
     elif "--resume" in sys.argv:
-        # Resuming, so lm has already linked the session into place
-        pass
+        session_id = sys.argv[sys.argv.index("--resume") + 1]
     else:
         sys.exit("Expected --session-id or --resume in the claude call")
 
-    script = json.loads(Path(os.environ[protocol.CLAUDE_SCRIPT_ENV]).read_text())
+    # Mirrors how claude names the directory it keeps a project's sessions in,
+    # so the turn only lands in the thread if lm predicted the same path
+    project_name = re.sub(r"[^a-zA-Z0-9]", "-", str(Path.cwd()))
+    project_path = Path.home() / ".claude" / "projects" / project_name
+    project_path.mkdir(parents=True, exist_ok=True)
 
-    kind = protocol.ClaudeKind(script["kind"])
+    with (project_path / f"{session_id}.jsonl").open("a") as session_file:
+        session_file.write(protocol.SessionTurn(prompt=prompt).to_line())
 
-    match kind:
-        case protocol.ClaudeKind.RESPONSE:
-            _write_event(_get_text_event(script["text"]))
+    script = protocol.ClaudeScript.from_json(
+        Path(os.environ[protocol.CLAUDE_SCRIPT_ENV]).read_text()
+    )
+
+    if script.text != "":
+        _write_event(
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": script.text},
+                },
+            }
+        )
+
+    match script.ending:
+        case protocol.ClaudeSuccess():
             _write_event({"type": "result", "subtype": "success", "is_error": False})
-        case protocol.ClaudeKind.NO_RESULT:
-            _write_event(_get_text_event(script["text"]))
-        case protocol.ClaudeKind.ERROR:
+        case protocol.ClaudeError(subtype=subtype, errors=errors):
             _write_event(
                 {
                     "type": "result",
-                    "subtype": script["subtype"],
+                    "subtype": subtype,
                     "is_error": True,
-                    "errors": script["errors"],
+                    "errors": errors,
                 }
             )
             sys.exit(ERROR_RETURNCODE)
-        case _:
-            sys.exit(f"Unhandled claude script kind: {kind}")
-
-
-def _get_text_event(text: str) -> dict[str, object]:
-    return {
-        "type": "stream_event",
-        "event": {
-            "type": "content_block_delta",
-            "delta": {"type": "text_delta", "text": text},
-        },
-    }
+        case None:
+            pass
 
 
 def _write_event(event: dict[str, object]) -> None:

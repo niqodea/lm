@@ -56,7 +56,7 @@ class Lm:
 
         lm = Lm(root_path, env)
         # Every run needs a script, so a test that ignores claude still has one.
-        lm.set_claude_response("")
+        lm.set_claude_result_success("")
         lm.invoke("init", stdin="")
         return lm
 
@@ -79,29 +79,29 @@ class Lm:
 
     def set_editor_prompts(self, *prompts: str) -> None:
         """Queue one prompt per editor run, so a chat loop ends when they run out."""
-        queued = protocol.PROMPT_SEPARATOR.join(prompts)
+        queued = protocol.PromptQueue(prompts=list(prompts)).to_text()
         self._get_stub_file_path(protocol.EDITOR_PROMPTS_ENV).write_text(queued)
 
-    def set_claude_response(self, response: str) -> None:
+    def set_claude_result_success(self, text: str) -> None:
+        """Make the claude stub stream the text, then end the turn successfully."""
         self._set_claude_script(
-            {"kind": protocol.ClaudeKind.RESPONSE, "text": response}
+            protocol.ClaudeScript(text=text, ending=protocol.ClaudeSuccess())
         )
 
-    def set_claude_error(self, subtype: str, errors: list[str]) -> None:
-        """Make the claude stub end the turn with an error result."""
+    def set_claude_result_error(
+        self, text: str, subtype: str, errors: list[str]
+    ) -> None:
+        """Make the claude stub stream the text, then end the turn with an error."""
         self._set_claude_script(
-            {
-                "kind": protocol.ClaudeKind.ERROR,
-                "subtype": subtype,
-                "errors": errors,
-            }
+            protocol.ClaudeScript(
+                text=text,
+                ending=protocol.ClaudeError(subtype=subtype, errors=errors),
+            )
         )
 
-    def set_claude_no_result(self, response: str) -> None:
-        """Make the claude stub stream a response, then stop without a result."""
-        self._set_claude_script(
-            {"kind": protocol.ClaudeKind.NO_RESULT, "text": response}
-        )
+    def set_claude_result_absent(self, text: str) -> None:
+        """Make the claude stub stream the text, then stop without a result."""
+        self._set_claude_script(protocol.ClaudeScript(text=text, ending=None))
 
     def set_selected_thread(self, name: str) -> None:
         self._get_stub_file_path(protocol.FZF_MATCH_ENV).write_text(name)
@@ -126,6 +126,12 @@ class Lm:
     def get_claude_stdin(self) -> str:
         return self._get_stub_file_path(protocol.CLAUDE_STDIN_ENV).read_text()
 
+    def get_session_prompts(self, thread: str) -> list[str]:
+        """Return the prompts recorded in the session claude has been resuming."""
+        session_path = self.get_thread_path(thread) / ".claude" / "session.jsonl"
+        lines = session_path.read_text().splitlines()
+        return [protocol.SessionTurn.from_line(line).prompt for line in lines]
+
     def get_thread_path(self, thread: str) -> Path:
         return self._root_path / "data" / "threads" / thread
 
@@ -135,9 +141,9 @@ class Lm:
     def get_turn_path(self, thread: str, turn_idx: int) -> Path:
         return sorted(self.get_thread_path(thread).glob("[0-9]*"))[turn_idx]
 
-    def _set_claude_script(self, script: dict[str, object]) -> None:
+    def _set_claude_script(self, script: protocol.ClaudeScript) -> None:
         path = self._get_stub_file_path(protocol.CLAUDE_SCRIPT_ENV)
-        path.write_text(json.dumps(script))
+        path.write_text(script.to_json())
 
     def _get_json(self, name: str) -> list[str]:
         loaded: list[str] = json.loads(self._get_stub_file_path(name).read_text())

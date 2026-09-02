@@ -22,7 +22,7 @@ def test_new_creates_a_thread(lm: Lm) -> None:
 
 def test_run_saves_the_prompt_and_the_response(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
+    lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("run", "--thread", "demo", stdin="")
@@ -35,7 +35,7 @@ def test_run_saves_the_prompt_and_the_response(lm: Lm) -> None:
 
 def test_run_sends_the_prompt_to_claude(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
+    lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="")
@@ -45,7 +45,7 @@ def test_run_sends_the_prompt_to_claude(lm: Lm) -> None:
 
 def test_run_prints_the_response(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
+    lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("run", "--thread", "demo", stdin="")
@@ -55,7 +55,7 @@ def test_run_prints_the_response(lm: Lm) -> None:
 
 def test_ls_lists_the_thread(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
+    lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="")
@@ -68,7 +68,7 @@ def test_ls_lists_the_thread(lm: Lm) -> None:
 
 def test_show_prints_the_exchange(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
+    lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="")
@@ -83,7 +83,7 @@ def test_show_prints_the_exchange(lm: Lm) -> None:
 
 def test_run_without_a_thread_creates_one(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
+    lm.set_claude_result_success("4")
 
     result = lm.invoke("run", stdin="")
 
@@ -93,7 +93,7 @@ def test_run_without_a_thread_creates_one(lm: Lm) -> None:
 
 def test_rename_changes_a_thread_name(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
+    lm.set_claude_result_success("4")
 
     lm.invoke("new", "before", stdin="")
     lm.invoke("run", "--thread", "before", stdin="")
@@ -105,7 +105,7 @@ def test_rename_changes_a_thread_name(lm: Lm) -> None:
 
 
 def test_rename_allows_another_turn(lm: Lm) -> None:
-    lm.set_claude_response("an answer")
+    lm.set_claude_result_success("an answer")
 
     lm.invoke("new", "before", stdin="")
     lm.set_editor_prompt("first question\n")
@@ -118,11 +118,13 @@ def test_rename_allows_another_turn(lm: Lm) -> None:
     assert (
         lm.get_turn_path("after", 1) / "prompt.md"
     ).read_text() == "second question\n"
+    # The session followed the thread to its new name
+    assert lm.get_session_prompts("after") == ["first question", "second question"]
 
 
 def test_rm_deletes_a_thread(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
+    lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="")
@@ -134,7 +136,7 @@ def test_rm_deletes_a_thread(lm: Lm) -> None:
 
 def test_last_resumes_the_most_recent_thread(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
+    lm.set_claude_result_success("4")
 
     lm.invoke("new", "older", stdin="")
     lm.invoke("new", "newer", stdin="")
@@ -146,7 +148,7 @@ def test_last_resumes_the_most_recent_thread(lm: Lm) -> None:
 
 def test_select_picks_a_thread(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
+    lm.set_claude_result_success("4")
 
     lm.invoke("new", "wanted", stdin="")
     lm.invoke("new", "other", stdin="")
@@ -162,7 +164,7 @@ def test_select_picks_a_thread(lm: Lm) -> None:
 
 def test_piped_stdin_reaches_claude(lm: Lm) -> None:
     lm.set_editor_prompt("summarize this\n")
-    lm.set_claude_response("done")
+    lm.set_claude_result_success("done")
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="PIPED CONTEXT")
@@ -172,7 +174,7 @@ def test_piped_stdin_reaches_claude(lm: Lm) -> None:
 
 def test_piped_stdin_is_saved_with_the_turn(lm: Lm) -> None:
     lm.set_editor_prompt("summarize this\n")
-    lm.set_claude_response("done")
+    lm.set_claude_result_success("done")
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="PIPED CONTEXT")
@@ -182,7 +184,7 @@ def test_piped_stdin_is_saved_with_the_turn(lm: Lm) -> None:
 
 def test_piped_stdin_does_not_reach_the_editor(lm: Lm) -> None:
     lm.set_editor_prompt("summarize this\n")
-    lm.set_claude_response("done")
+    lm.set_claude_result_success("done")
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="PIPED CONTEXT")
@@ -193,7 +195,7 @@ def test_piped_stdin_does_not_reach_the_editor(lm: Lm) -> None:
 
 def test_attachment_is_saved_with_the_turn(lm: Lm, tmp_path: Path) -> None:
     lm.set_editor_prompt("read this\n")
-    lm.set_claude_response("read it")
+    lm.set_claude_result_success("read it")
     attachment_path = tmp_path / "notes.md"
     attachment_path.write_text("ATTACHED TEXT")
 
@@ -206,7 +208,7 @@ def test_attachment_is_saved_with_the_turn(lm: Lm, tmp_path: Path) -> None:
 
 def test_attachment_is_announced_to_claude(lm: Lm, tmp_path: Path) -> None:
     lm.set_editor_prompt("read this\n")
-    lm.set_claude_response("read it")
+    lm.set_claude_result_success("read it")
     attachment_path = tmp_path / "notes.md"
     attachment_path.write_text("ATTACHED TEXT")
 
@@ -218,7 +220,7 @@ def test_attachment_is_announced_to_claude(lm: Lm, tmp_path: Path) -> None:
 
 def test_attachment_alias_renames_the_saved_file(lm: Lm, tmp_path: Path) -> None:
     lm.set_editor_prompt("read this\n")
-    lm.set_claude_response("read it")
+    lm.set_claude_result_success("read it")
     attachment_path = tmp_path / "notes.md"
     attachment_path.write_text("ATTACHED TEXT")
 
@@ -235,7 +237,7 @@ def test_attachment_alias_renames_the_saved_file(lm: Lm, tmp_path: Path) -> None
 def test_a_preset_is_offered_as_a_draft(lm: Lm) -> None:
     lm.set_preset("review", "REVIEW THIS CODE")
     lm.set_editor_prompt("go\n")
-    lm.set_claude_response("ok")
+    lm.set_claude_result_success("ok")
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", "--preset", "review", stdin="")
@@ -247,7 +249,7 @@ def test_a_preset_is_offered_as_a_draft(lm: Lm) -> None:
 
 
 def test_second_run_starts_a_second_turn(lm: Lm) -> None:
-    lm.set_claude_response("an answer")
+    lm.set_claude_result_success("an answer")
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("first question\n")
@@ -262,7 +264,7 @@ def test_second_run_starts_a_second_turn(lm: Lm) -> None:
 
 
 def test_past_turns_appear_in_the_editor(lm: Lm) -> None:
-    lm.set_claude_response("first answer")
+    lm.set_claude_result_success("first answer")
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("first question\n")
@@ -276,7 +278,7 @@ def test_past_turns_appear_in_the_editor(lm: Lm) -> None:
 
 
 def test_past_turns_are_not_resent_to_claude(lm: Lm) -> None:
-    lm.set_claude_response("first answer")
+    lm.set_claude_result_success("first answer")
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("first question\n")
@@ -289,7 +291,7 @@ def test_past_turns_are_not_resent_to_claude(lm: Lm) -> None:
 
 
 def test_a_second_turn_resumes_the_session(lm: Lm) -> None:
-    lm.set_claude_response("an answer")
+    lm.set_claude_result_success("an answer")
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("first question\n")
@@ -297,11 +299,26 @@ def test_a_second_turn_resumes_the_session(lm: Lm) -> None:
     lm.set_editor_prompt("second question\n")
     lm.invoke("run", "--thread", "demo", stdin="")
 
-    assert "--resume" in lm.get_claude_argv()
+    # The second turn grew the session the first turn started
+    assert lm.get_session_prompts("demo") == ["first question", "second question"]
+
+
+def test_threads_keep_separate_sessions(lm: Lm) -> None:
+    lm.set_claude_result_success("an answer")
+
+    lm.invoke("new", "one", stdin="")
+    lm.invoke("new", "two", stdin="")
+    lm.set_editor_prompt("question for one\n")
+    lm.invoke("run", "--thread", "one", stdin="")
+    lm.set_editor_prompt("question for two\n")
+    lm.invoke("run", "--thread", "two", stdin="")
+
+    assert lm.get_session_prompts("one") == ["question for one"]
+    assert lm.get_session_prompts("two") == ["question for two"]
 
 
 def test_chat_runs_each_queued_prompt_as_a_turn(lm: Lm) -> None:
-    lm.set_claude_response("an answer")
+    lm.set_claude_result_success("an answer")
     lm.set_editor_prompts("first question\n", "second question\n")
 
     lm.invoke("new", "demo", stdin="")
@@ -367,7 +384,7 @@ def test_attach_adds_to_the_staged_query(lm: Lm, tmp_path: Path) -> None:
 
 def test_commit_turns_the_staged_query_into_a_turn(lm: Lm) -> None:
     lm.set_editor_prompt("staged question\n")
-    lm.set_claude_response("staged answer")
+    lm.set_claude_result_success("staged answer")
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("edit-prompt", "--thread", "demo", stdin="")
@@ -397,7 +414,7 @@ def test_clear_discards_the_staged_query(lm: Lm) -> None:
 
 def test_thread_model_reaches_claude(lm: Lm) -> None:
     lm.set_editor_prompt("hello\n")
-    lm.set_claude_response("hi")
+    lm.set_claude_result_success("hi")
 
     lm.invoke("new", "demo", "--claude-model", "claude-haiku-4-5", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="")
@@ -408,7 +425,7 @@ def test_thread_model_reaches_claude(lm: Lm) -> None:
 
 def test_thread_capability_reaches_claude(lm: Lm) -> None:
     lm.set_editor_prompt("hello\n")
-    lm.set_claude_response("hi")
+    lm.set_claude_result_success("hi")
 
     lm.invoke("new", "demo", "--with", "web", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="")
@@ -430,7 +447,7 @@ def test_status_shows_the_thread_settings(lm: Lm) -> None:
 
 def test_a_thread_without_capabilities_gets_no_tools(lm: Lm) -> None:
     lm.set_editor_prompt("hello\n")
-    lm.set_claude_response("hi")
+    lm.set_claude_result_success("hi")
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="")
@@ -483,7 +500,7 @@ def test_rm_refuses_an_unknown_thread(lm: Lm) -> None:
 
 def test_run_reports_a_failed_inference(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_error("error_max_turns", [])
+    lm.set_claude_result_error("", "error_max_turns", [])
 
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("run", "--thread", "demo", stdin="")
@@ -495,7 +512,7 @@ def test_run_reports_a_failed_inference(lm: Lm) -> None:
 
 def test_a_failed_inference_leaves_the_query_staged(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_error("error_during_execution", [])
+    lm.set_claude_result_error("", "error_during_execution", [])
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="")
@@ -506,7 +523,9 @@ def test_a_failed_inference_leaves_the_query_staged(lm: Lm) -> None:
 
 def test_run_reports_the_error_text_claude_gave(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_error("error_max_turns", ["Reached maximum number of turns (30)"])
+    lm.set_claude_result_error(
+        "", "error_max_turns", ["Reached maximum number of turns (30)"]
+    )
 
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("run", "--thread", "demo", stdin="")
@@ -517,7 +536,7 @@ def test_run_reports_the_error_text_claude_gave(lm: Lm) -> None:
 
 def test_an_unknown_failure_names_its_subtype(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_error("error_invented_later", [])
+    lm.set_claude_result_error("", "error_invented_later", [])
 
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("run", "--thread", "demo", stdin="")
@@ -528,7 +547,7 @@ def test_an_unknown_failure_names_its_subtype(lm: Lm) -> None:
 
 def test_run_reports_a_stream_without_a_result(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_no_result("4")
+    lm.set_claude_result_absent("4")
 
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("run", "--thread", "demo", stdin="")
@@ -588,7 +607,7 @@ def test_select_refuses_when_nothing_is_picked(lm: Lm) -> None:
 
 def test_committed_turn_files_are_read_only(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
+    lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="")
@@ -604,7 +623,7 @@ def test_committed_turn_files_are_read_only(lm: Lm) -> None:
 def test_vim_gets_the_prompt_below_the_history(lm: Lm) -> None:
     lm.set_editor("vim")
     lm.set_preset("draft", "MY DRAFT")
-    lm.set_claude_response("first answer")
+    lm.set_claude_result_success("first answer")
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("first question\n")
@@ -614,16 +633,16 @@ def test_vim_gets_the_prompt_below_the_history(lm: Lm) -> None:
 
     buffer = lm.get_editor_buffer()
     assert buffer.index("first question") < buffer.index("MY DRAFT")
-    # The half below the scissors line is the one lm reads back
+    # The half below the scissors line is the one lm reads back, draft included
     assert (
         lm.get_turn_path("demo", 1) / "prompt.md"
-    ).read_text() == "second question\n"
+    ).read_text() == "MY DRAFT\nsecond question\n"
 
 
 def test_vim_is_told_to_jump_to_the_prompt(lm: Lm) -> None:
     lm.set_editor("vim")
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_response("4")
+    lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="")
@@ -633,7 +652,7 @@ def test_vim_is_told_to_jump_to_the_prompt(lm: Lm) -> None:
 
 def test_nano_gets_the_prompt_above_the_history(lm: Lm) -> None:
     lm.set_preset("draft", "MY DRAFT")
-    lm.set_claude_response("first answer")
+    lm.set_claude_result_success("first answer")
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("first question\n")

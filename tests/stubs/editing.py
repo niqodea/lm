@@ -8,7 +8,7 @@ from protocol import (
     EDITOR_ARGV_ENV,
     EDITOR_BUFFER_ENV,
     EDITOR_PROMPTS_ENV,
-    PROMPT_SEPARATOR,
+    PromptQueue,
 )
 
 # Mirrors lm's own buffer format
@@ -24,6 +24,6 @@ def record_call(buffer: str, argv: list[str]) -> None:
 def take_prompt() -> str:
     """Return the next queued prompt, leaving the rest for later runs."""
     prompts_path = Path(os.environ[EDITOR_PROMPTS_ENV])
-    prompts = prompts_path.read_text().split(PROMPT_SEPARATOR)
-    prompts_path.write_text(PROMPT_SEPARATOR.join(prompts[1:]))
-    return prompts[0]
+    queue = PromptQueue.from_text(prompts_path.read_text())
+    prompts_path.write_text(PromptQueue(queue.prompts[1:]).to_text())
+    return queue.prompts[0]

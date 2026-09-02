@@ -8,13 +8,13 @@ import editing
 
 
 def main() -> None:
-    """Record the buffer lm built, then write the next prompt into it."""
+    """Record the buffer lm built, then type the next prompt into its half."""
     buffer_path = Path(sys.argv[-1])
     buffer = buffer_path.read_text()
     editing.record_call(buffer, argv=sys.argv[1:-1])
 
     fragments = buffer.split(editing.SCISSORS_SEPARATOR)
-    fragments[-1] = editing.take_prompt()
+    fragments[-1] += "\n" + editing.take_prompt()
     buffer_path.write_text(editing.SCISSORS_SEPARATOR.join(fragments))
 
 
