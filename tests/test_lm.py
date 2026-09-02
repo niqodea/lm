@@ -614,6 +614,10 @@ def test_vim_gets_the_prompt_below_the_history(lm: Lm) -> None:
 
     buffer = lm.get_editor_buffer()
     assert buffer.index("first question") < buffer.index("MY DRAFT")
+    # The half below the scissors line is the one lm reads back
+    assert (
+        lm.get_turn_path("demo", 1) / "prompt.md"
+    ).read_text() == "second question\n"
 
 
 def test_vim_is_told_to_jump_to_the_prompt(lm: Lm) -> None:
@@ -627,7 +631,7 @@ def test_vim_is_told_to_jump_to_the_prompt(lm: Lm) -> None:
     assert "+$" in lm.get_editor_argv()
 
 
-def test_other_editors_get_the_prompt_above_the_history(lm: Lm) -> None:
+def test_nano_gets_the_prompt_above_the_history(lm: Lm) -> None:
     lm.set_preset("draft", "MY DRAFT")
     lm.set_claude_response("first answer")
 

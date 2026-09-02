@@ -32,8 +32,8 @@ class Lm:
         # next to their real selves.
         (bin_path / "claude").symlink_to(STUBS_PATH / "claude")
         (bin_path / "fzf").symlink_to(STUBS_PATH / "fzf")
-        (bin_path / "editor").symlink_to(STUBS_PATH / "editor")
-        (bin_path / "vim").symlink_to(STUBS_PATH / "editor")
+        (bin_path / "nano").symlink_to(STUBS_PATH / "nano")
+        (bin_path / "vim").symlink_to(STUBS_PATH / "vim")
 
         (root_path / "home").mkdir()
         (root_path / "config").mkdir()
@@ -50,7 +50,7 @@ class Lm:
             "XDG_CONFIG_HOME": str(root_path / "config"),
             "LM_DATA_DIR": str(root_path / "data"),
             "LM_TTY": str(root_path / "tty"),
-            "EDITOR": str(bin_path / "editor"),
+            "EDITOR": str(bin_path / "nano"),
             **{name: str(root_path / name) for name in protocol.STUB_FILE_ENVS},
         }
 

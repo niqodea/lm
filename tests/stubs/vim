@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""Stand-in for vim: writes the prompt below the scissors line."""
+
+import sys
+from pathlib import Path
+
+import editing
+
+
+def main() -> None:
+    """Record the buffer lm built, then write the next prompt into it."""
+    buffer_path = Path(sys.argv[-1])
+    buffer = buffer_path.read_text()
+    editing.record_call(buffer, argv=sys.argv[1:-1])
+
+    fragments = buffer.split(editing.SCISSORS_SEPARATOR)
+    fragments[-1] = editing.take_prompt()
+    buffer_path.write_text(editing.SCISSORS_SEPARATOR.join(fragments))
+
+
+if __name__ == "__main__":
+    main()
