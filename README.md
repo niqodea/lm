@@ -13,7 +13,7 @@ No API key. No usage-based billing. Just your existing Claude subscription.
 Same subscription, same models, a smaller tool around them: UNIX conventions throughout, plain files, and nothing that happens without you asking for it.
 
 - **Your conversations are files.** `claude` keeps sessions in an internal format, keyed to the directory you launched it from. `lm` writes every prompt and response as markdown you can grep across, edit, or delete — and threads are topics, so you resume `debug` from anywhere.
-- **Nothing comes along for the ride.** Every turn runs in an empty directory: no `CLAUDE.md`, no tools, nothing read from disk unless you attached it yourself.
+- **Nothing comes along for the ride.** Every turn runs in an empty directory with your Claude Code configuration switched off: no `CLAUDE.md`, no hooks, no skills, no tools, nothing read from disk unless you attached it yourself.
 - **No surprising defaults.** A thread's model and capabilities are fixed when you create it, and finished turns are written read-only. Nothing changes under you between one turn and the next.
 - **Your editor is the prompt box.** Write a long prompt the way you write everything else, with the past exchanges visible below the scissors line while you do.
 - **It composes.** `cat main.py | lm run`, `lm show -t debug | pbcopy`. A REPL cannot sit in a pipeline.
@@ -142,7 +142,7 @@ Store reusable instructions in `~/.config/lm/presets/<name>.md`. They're prepend
 
 `lm` shells out to `claude --print --output-format stream-json` and streams the text back as it arrives.
 A thread resumes by symlinking the session file Claude Code keeps, which is an internal detail that could change.
-Every turn runs in an empty scratch directory, so no `CLAUDE.md` is picked up from wherever you happened to be.
+Every turn runs in an empty scratch directory under `--safe-mode`, so neither the directory you are in nor your Claude Code configuration reaches the turn.
 
 None of that is essential to Claude in particular: any backend offering the same kind of call — non-interactive, resumable, streaming — could sit in its place.
 The Claude-specific pieces are confined to the inference path and named for it, and turning that into a proper backend interface, with other backends behind it, is the next thing planned.

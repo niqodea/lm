@@ -43,6 +43,16 @@ def test_run_sends_the_prompt_to_claude(lm: Lm) -> None:
     assert lm.get_claude_prompt() == "what is 2+2?"
 
 
+def test_run_keeps_user_config_out_of_the_turn(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_result_success("4")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert "--safe-mode" in lm.get_claude_argv()
+
+
 def test_run_prints_the_response(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_success("4")

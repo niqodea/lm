@@ -946,6 +946,8 @@ def _execute_turn(
             "--system-prompt",
             SYSTEM_PROMPT,
             "--print",
+            # Keeps user config out; unlike --bare, it leaves OAuth alone
+            "--safe-mode",
             # Restrict tool context
             "--tools",
             claude_tools,
