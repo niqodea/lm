@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 from protocol import (
@@ -22,6 +23,10 @@ from protocol import (
 
 ERROR_RETURNCODE = 1
 
+# Claude is still writing the session file when it reports its result, so the
+# stub takes its time too, and a caller that does not wait moves the file early
+SESSION_WRITE_DELAY_SECONDS = 0.05
+
 
 def main() -> None:
     """Record the call lm made, then play the one run the test scripted."""
@@ -35,15 +40,6 @@ def main() -> None:
         session_id = sys.argv[sys.argv.index("--resume") + 1]
     else:
         sys.exit("Expected --session-id or --resume in the claude call")
-
-    # Mirrors how claude names the directory it keeps a project's sessions in,
-    # so the turn only lands in the thread if lm predicted the same path
-    project_name = re.sub(r"[^a-zA-Z0-9]", "-", str(Path.cwd()))
-    project_path = Path.home() / ".claude" / "projects" / project_name
-    project_path.mkdir(parents=True, exist_ok=True)
-
-    with (project_path / f"{session_id}.jsonl").open("a") as session_file:
-        session_file.write(SessionTurn(prompt=prompt).to_line())
 
     script = ClaudeScript.from_json(Path(os.environ[CLAUDE_SCRIPT_ENV]).read_text())
 
@@ -60,6 +56,7 @@ def main() -> None:
     match script.ending:
         case ClaudeSuccess():
             _write_event({"type": "result", "subtype": "success", "is_error": False})
+            returncode = 0
         case ClaudeError(subtype=subtype, errors=errors):
             _write_event(
                 {
@@ -69,9 +66,22 @@ def main() -> None:
                     "errors": errors,
                 }
             )
-            sys.exit(ERROR_RETURNCODE)
+            returncode = ERROR_RETURNCODE
         case None:
-            pass
+            returncode = 0
+
+    time.sleep(SESSION_WRITE_DELAY_SECONDS)
+
+    # Mirrors how claude names the directory it keeps a project's sessions in,
+    # so the turn only lands in the thread if lm predicted the same path
+    project_name = re.sub(r"[^a-zA-Z0-9]", "-", str(Path.cwd()))
+    project_path = Path.home() / ".claude" / "projects" / project_name
+    project_path.mkdir(parents=True, exist_ok=True)
+
+    with (project_path / f"{session_id}.jsonl").open("a") as session_file:
+        session_file.write(SessionTurn(prompt=prompt).to_line())
+
+    sys.exit(returncode)
 
 
 def _write_tool_call_event(name: str, arguments: dict[str, object]) -> None:
@@ -110,6 +120,7 @@ def _write_text_event(text: str) -> None:
 
 def _write_event(event: dict[str, object]) -> None:
     sys.stdout.write(json.dumps(event) + "\n")
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":
