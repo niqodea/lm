@@ -38,6 +38,10 @@ INSERT_MODE_EDITORS = {"vim", "nvim"}
 PROMPT_IS_LAST_EDITORS = {"vi", "vim", "nvim"}
 
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+DEFAULT_CLAUDE_EFFORT = "medium"
+
+# claude only warns on an effort it does not know, so lm rejects one itself
+CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 CAPABILITY_CLAUDE_TOOLS = {"web": ("WebFetch", "WebSearch")}
 
@@ -119,6 +123,13 @@ def main() -> None:
         "--claude-model",
         help="Claude model to use for this thread.",
         default=DEFAULT_CLAUDE_MODEL,
+    )
+    new_parser.add_argument(
+        "-e",
+        "--claude-effort",
+        help="Claude effort level to use for this thread.",
+        choices=CLAUDE_EFFORTS,
+        default=DEFAULT_CLAUDE_EFFORT,
     )
     new_parser.add_argument(
         "-w",
@@ -275,6 +286,7 @@ def _cmd_new(args: argparse.Namespace) -> None:
     name: str = args.name
     capabilities: list[str] = args.capabilities
     claude_model: str = args.claude_model
+    claude_effort: str = args.claude_effort
 
     _assert_thread_name_is_valid(name)
 
@@ -284,6 +296,7 @@ def _cmd_new(args: argparse.Namespace) -> None:
     _create_thread(
         path,
         claude_model=claude_model,
+        claude_effort=claude_effort,
         claude_tools=_resolve_claude_tools(capabilities),
     )
 
@@ -318,6 +331,7 @@ def _cmd_rm(args: argparse.Namespace) -> None:
     thread.editmsg_path.unlink(missing_ok=True)
 
     thread.model_path.unlink()
+    thread.effort_path.unlink()
     thread.tools_path.unlink()
     thread.session_path.unlink(missing_ok=True)
     thread.scratch_cwd_path.rmdir()
@@ -516,6 +530,10 @@ class _Thread:
         return self.claude_path / "model"
 
     @property
+    def effort_path(self) -> Path:
+        return self.claude_path / "effort"
+
+    @property
     def tools_path(self) -> Path:
         return self.claude_path / "tools"
 
@@ -610,7 +628,9 @@ def _get_threads(threads_path: Path) -> list[_Thread]:
     return [_Thread(p) for p in paths]
 
 
-def _create_thread(path: Path, *, claude_model: str, claude_tools: str) -> _Thread:
+def _create_thread(
+    path: Path, *, claude_model: str, claude_effort: str, claude_tools: str
+) -> _Thread:
     thread = _Thread(path)
 
     thread.path.mkdir()
@@ -619,6 +639,7 @@ def _create_thread(path: Path, *, claude_model: str, claude_tools: str) -> _Thre
 
     # We tie these to the thread for simplicity and not to bust cache
     _write_read_only(thread.model_path, claude_model)
+    _write_read_only(thread.effort_path, claude_effort)
     _write_read_only(thread.tools_path, claude_tools)
 
     return thread
@@ -799,6 +820,7 @@ def _resolve_thread_and_prompt(
     thread = _create_thread(
         threads_path / thread_timestamp,
         claude_model=DEFAULT_CLAUDE_MODEL,
+        claude_effort=DEFAULT_CLAUDE_EFFORT,
         claude_tools="",
     )
     return thread, prompt
@@ -941,6 +963,8 @@ def _execute_turn(
             claude_prompt,
             "--model",
             thread.model_path.read_text(),
+            "--effort",
+            thread.effort_path.read_text(),
             *claude_session_args,
             # Simplify behavior
             "--system-prompt",
@@ -1198,6 +1222,7 @@ def _format_status(thread: _Thread) -> str:
     lines = [
         f"{'Thread:':<{STATUS_LABEL_WIDTH}}{thread.name}",
         f"{'Model:':<{STATUS_LABEL_WIDTH}}{thread.model_path.read_text()}",
+        f"{'Effort:':<{STATUS_LABEL_WIDTH}}{thread.effort_path.read_text()}",
         f"{'Tools:':<{STATUS_LABEL_WIDTH}}{tools}",
         f"{'Turns:':<{STATUS_LABEL_WIDTH}}{_get_turns_count(thread)}",
         "",

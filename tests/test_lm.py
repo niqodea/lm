@@ -433,6 +433,17 @@ def test_thread_model_reaches_claude(lm: Lm) -> None:
     assert argv[argv.index("--model") + 1] == "claude-haiku-4-5"
 
 
+def test_thread_effort_reaches_claude(lm: Lm) -> None:
+    lm.set_editor_prompt("hello\n")
+    lm.set_claude_result_success("hi")
+
+    lm.invoke("new", "demo", "--claude-effort", "high", stdin="")
+    lm.invoke("run", "--thread", "demo", stdin="")
+
+    argv = lm.get_claude_argv()
+    assert argv[argv.index("--effort") + 1] == "high"
+
+
 def test_thread_capability_reaches_claude(lm: Lm) -> None:
     lm.set_editor_prompt("hello\n")
     lm.set_claude_result_success("hi")

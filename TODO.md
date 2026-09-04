@@ -6,7 +6,6 @@
   Maybe stdin could become just another file?
   Since we save it on disk anyway.
 - Check what the Claude json events look like and extract other useful stuff.
-- Consider `--effort` as a thread setting, alongside the model.
 - Auto-compaction cannot be turned off, only widened with `--autocompact` (100k to 1M).
   It rewrites what the resumed session sees, which is at odds with owning the context.
 - Differentate prompt (text part) vs query (the whole) from the POV of the user.

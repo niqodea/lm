@@ -120,6 +120,7 @@ Create a thread with specific capabilities or model:
 ```sh
 lm new research --with web
 lm new fast --claude-model claude-haiku-4-5
+lm new hard --claude-effort high
 ```
 
 ### Staged workflow
