@@ -35,6 +35,33 @@ STUB_FILE_ENVS = (
 
 
 @dataclass(frozen=True)
+class ClaudeText:
+    """Stream this much of the response."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class ClaudeToolCall:
+    """Report a call to this tool, the way a turn that uses one does."""
+
+    name: str
+    # Whatever the tool takes, so the keys are the tool's rather than ours
+    arguments: dict[str, object]
+
+
+@dataclass(frozen=True)
+class ClaudeCompaction:
+    """Report the summarizing of the history at this size."""
+
+    pre_tokens: int
+
+
+# A run plays these in order, before it ends the turn
+ClaudeEvent = ClaudeText | ClaudeToolCall | ClaudeCompaction
+
+
+@dataclass(frozen=True)
 class ClaudeSuccess:
     """End the turn as a run that worked."""
 
@@ -53,12 +80,23 @@ ClaudeEnding = ClaudeSuccess | ClaudeError | None
 
 @dataclass(frozen=True)
 class ClaudeScript:
-    """One scripted claude run: stream this text, then end the turn this way."""
+    """One scripted claude run: play these events, then end the turn this way."""
 
-    text: str
+    events: list[ClaudeEvent]
     ending: ClaudeEnding
 
     def to_json(self) -> str:
+        events: list[dict[str, object]] = []
+        for event in self.events:
+            match event:
+                case ClaudeText(text=text):
+                    events.append({"kind": "text", "text": text})
+                case ClaudeToolCall(name=name, arguments=arguments):
+                    events.append(
+                        {"kind": "tool_call", "name": name, "arguments": arguments}
+                    )
+                case ClaudeCompaction(pre_tokens=pre_tokens):
+                    events.append({"kind": "compaction", "pre_tokens": pre_tokens})
         ending: dict[str, object] | None
         match self.ending:
             case ClaudeSuccess():
@@ -67,11 +105,20 @@ class ClaudeScript:
                 ending = {"kind": "error", "subtype": subtype, "errors": errors}
             case None:
                 ending = None
-        return json.dumps({"text": self.text, "ending": ending})
+        return json.dumps({"events": events, "ending": ending})
 
     @staticmethod
     def from_json(text: str) -> ClaudeScript:
         script = json.loads(text)
+        events: list[ClaudeEvent] = []
+        for event in script["events"]:
+            match event:
+                case {"kind": "text", "text": event_text}:
+                    events.append(ClaudeText(text=event_text))
+                case {"kind": "tool_call", "name": name, "arguments": arguments}:
+                    events.append(ClaudeToolCall(name=name, arguments=arguments))
+                case {"kind": "compaction", "pre_tokens": pre_tokens}:
+                    events.append(ClaudeCompaction(pre_tokens=pre_tokens))
         ending: ClaudeEnding
         match script["ending"]:
             case {"kind": "success"}:
@@ -80,7 +127,7 @@ class ClaudeScript:
                 ending = ClaudeError(subtype=subtype, errors=errors)
             case None:
                 ending = None
-        return ClaudeScript(text=script["text"], ending=ending)
+        return ClaudeScript(events=events, ending=ending)
 
 
 # --- what the claude stub records in a session file ---

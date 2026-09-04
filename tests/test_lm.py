@@ -341,6 +341,93 @@ def test_chat_runs_each_queued_prompt_as_a_turn(lm: Lm) -> None:
     ).read_text() == "second question\n"
 
 
+def test_run_reports_a_compacted_session(lm: Lm) -> None:
+    lm.set_editor_prompt("a question\n")
+    lm.set_claude_result_success_with_compaction("", 190000, "an answer")
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert "Compacted session at 190000 tokens" in result.stderr
+    assert (lm.get_turn_path("demo", 0) / "response.md").read_text() == "an answer\n"
+
+
+def test_a_compaction_starts_a_new_paragraph(lm: Lm) -> None:
+    lm.set_editor_prompt("a question\n")
+    lm.set_claude_result_success_with_compaction("first half", 190000, "second half")
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("run", "--thread", "demo", stdin="")
+
+    # The notice goes to stderr, so it never lands inside the saved response
+    assert "Compacted session at 190000 tokens" in result.stderr
+    assert (
+        lm.get_turn_path("demo", 0) / "response.md"
+    ).read_text() == "first half\n\nsecond half\n"
+
+
+def test_a_tool_call_shows_in_the_response(lm: Lm) -> None:
+    lm.set_editor_prompt("a question\n")
+    lm.set_claude_result_success_with_tool_calls(
+        "looking it up", [("WebSearch", {"query": "lm cli"})], "found it"
+    )
+
+    lm.invoke("new", "demo", "--with", "web", stdin="")
+    result = lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert 'Running tool: WebSearch(query="lm cli")' in result.stdout
+    assert (lm.get_turn_path("demo", 0) / "response.md").read_text() == (
+        'looking it up\n\n> Running tool: WebSearch(query="lm cli")\n\nfound it\n'
+    )
+
+
+def test_a_tool_call_before_any_text_opens_the_response(lm: Lm) -> None:
+    lm.set_editor_prompt("a question\n")
+    lm.set_claude_result_success_with_tool_calls("", [("Now", {})], "found it")
+
+    lm.invoke("new", "demo", "--with", "web", stdin="")
+    lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert (
+        lm.get_turn_path("demo", 0) / "response.md"
+    ).read_text() == "> Running tool: Now()\n\nfound it\n"
+
+
+def test_a_tool_call_after_a_tool_call_starts_a_new_paragraph(lm: Lm) -> None:
+    lm.set_editor_prompt("a question\n")
+    lm.set_claude_result_success_with_tool_calls(
+        "",
+        [("WebSearch", {"query": "lm"}), ("WebFetch", {"url": "https://lm.dev"})],
+        "found it",
+    )
+
+    lm.invoke("new", "demo", "--with", "web", stdin="")
+    lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert (lm.get_turn_path("demo", 0) / "response.md").read_text() == (
+        '> Running tool: WebSearch(query="lm")\n\n'
+        '> Running tool: WebFetch(url="https://lm.dev")\n\n'
+        "found it\n"
+    )
+
+
+def test_a_tool_call_shows_every_argument_it_was_given(lm: Lm) -> None:
+    lm.set_editor_prompt("a question\n")
+    lm.set_claude_result_success_with_tool_calls(
+        "",
+        [("WebFetch", {"url": "https://lm.dev", "timeout": 30, "raw": False})],
+        "found it",
+    )
+
+    lm.invoke("new", "demo", "--with", "web", stdin="")
+    lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert (lm.get_turn_path("demo", 0) / "response.md").read_text() == (
+        '> Running tool: WebFetch(url="https://lm.dev", timeout=30, raw=false)\n\n'
+        "found it\n"
+    )
+
+
 # --- The staged workflow ---
 
 

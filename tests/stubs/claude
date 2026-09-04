@@ -11,9 +11,12 @@ from protocol import (
     CLAUDE_ARGV_ENV,
     CLAUDE_SCRIPT_ENV,
     CLAUDE_STDIN_ENV,
+    ClaudeCompaction,
     ClaudeError,
     ClaudeScript,
     ClaudeSuccess,
+    ClaudeText,
+    ClaudeToolCall,
     SessionTurn,
 )
 
@@ -44,16 +47,15 @@ def main() -> None:
 
     script = ClaudeScript.from_json(Path(os.environ[CLAUDE_SCRIPT_ENV]).read_text())
 
-    if script.text != "":
-        _write_event(
-            {
-                "type": "stream_event",
-                "event": {
-                    "type": "content_block_delta",
-                    "delta": {"type": "text_delta", "text": script.text},
-                },
-            }
-        )
+    for event in script.events:
+        match event:
+            case ClaudeText(text=event_text):
+                if event_text != "":
+                    _write_text_event(event_text)
+            case ClaudeToolCall(name=name, arguments=arguments):
+                _write_tool_call_event(name, arguments)
+            case ClaudeCompaction(pre_tokens=pre_tokens):
+                _write_compaction_event(pre_tokens)
 
     match script.ending:
         case ClaudeSuccess():
@@ -70,6 +72,40 @@ def main() -> None:
             sys.exit(ERROR_RETURNCODE)
         case None:
             pass
+
+
+def _write_tool_call_event(name: str, arguments: dict[str, object]) -> None:
+    """Report the call the way claude does, as a block of a finished message."""
+    _write_event(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "tool_use", "name": name, "input": arguments}]
+            },
+        }
+    )
+
+
+def _write_compaction_event(pre_tokens: int) -> None:
+    _write_event(
+        {
+            "type": "system",
+            "subtype": "compact_boundary",
+            "compact_metadata": {"trigger": "auto", "pre_tokens": pre_tokens},
+        }
+    )
+
+
+def _write_text_event(text: str) -> None:
+    _write_event(
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": text},
+            },
+        }
+    )
 
 
 def _write_event(event: dict[str, object]) -> None:

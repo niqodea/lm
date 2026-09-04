@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import io
 import json
 import os
 import re
@@ -59,6 +58,7 @@ CLAUDE_ERROR_SUBTYPE_REASONS = {
 }
 
 PROMPT_SUMMARY_MAX_LENGTH = 100
+TOOL_ARGUMENT_MAX_LENGTH = 60
 
 LS_NAME_LENGTH = 15
 LS_TURNS_COUNT_WIDTH = 2
@@ -1016,7 +1016,7 @@ def _read_response(
     if process.stdout is None:
         sys.exit("Unexpected error: Claude standard output not captured")
 
-    buffer = io.StringIO()
+    stream = _ResponseStream(char_delay=char_delay)
     for line in process.stdout:
         event = json.loads(line)
 
@@ -1034,9 +1034,26 @@ def _read_response(
                         thread_name=thread_name,
                     )
                 )
-            buffer.write("\n")
-            sys.stdout.write("\n")
-            return buffer.getvalue()
+            stream.end()
+            return stream.get_text()
+
+        # Claude summarizes the history once it grows too long. The turns on
+        # disk still hold every exchange, but it stops sending them all.
+        if event["type"] == "system" and event.get("subtype") == "compact_boundary":
+            pre_tokens = event["compact_metadata"]["pre_tokens"]
+            stream.write_notice(f"Compacted session at {pre_tokens} tokens")
+            continue
+
+        # Claude reports each block of a message once it is whole, so a complete
+        # tool call arrives in one piece.
+        if event["type"] == "assistant":
+            for content_block in event["message"]["content"]:
+                if content_block["type"] == "tool_use":
+                    call = _format_tool_call(
+                        content_block["name"], content_block["input"]
+                    )
+                    stream.write_tool_call(call)
+            continue
 
         if event["type"] != "stream_event":
             continue
@@ -1044,18 +1061,8 @@ def _read_response(
             continue
         if event["event"]["delta"]["type"] != "text_delta":
             continue
-        text = event["event"]["delta"]["text"]
 
-        buffer.write(text)
-
-        if char_delay == 0.0:
-            sys.stdout.write(text)
-            sys.stdout.flush()
-        else:
-            for char in text:
-                sys.stdout.write(char)
-                sys.stdout.flush()
-                time.sleep(char_delay)
+        stream.write_text(event["event"]["delta"]["text"])
 
     # Every result event returns or exits, so the stream ended without one.
     process.wait()
@@ -1084,6 +1091,67 @@ def _format_inference_failure(*, detail: str, thread_name: str) -> str:
         f"  Retry with:      lm commit -t {thread_name}\n"
         f"  Discard it with: lm clear -t {thread_name}"
     )
+
+
+def _format_tool_call(name: str, arguments: dict[str, object]) -> str:
+    formatted_arguments: list[str] = []
+    for argument, value in arguments.items():
+        summary = _summarize_text(
+            json.dumps(value), max_length=TOOL_ARGUMENT_MAX_LENGTH
+        )
+        formatted_arguments.append(f"{argument}={summary}")
+    return f"{name}({', '.join(formatted_arguments)})"
+
+
+class _ResponseStream:
+    """The response as it arrives, written out one paragraph at a time."""
+
+    def __init__(self, char_delay: float) -> None:
+        self._char_delay = char_delay
+        self._chunks: list[str] = []
+        self._is_paragraph_closed = False
+
+    def write_text(self, text: str) -> None:
+        if self._is_paragraph_closed:
+            self._write("\n\n")
+            self._is_paragraph_closed = False
+        self._write(text)
+
+    def write_tool_call(self, call: str) -> None:
+        """Say in the response that a tool is running."""
+        self._break_paragraph()
+        self._write(f"> Running tool: {call}")
+        self._is_paragraph_closed = True
+
+    def write_notice(self, notice: str) -> None:
+        """Report on stderr what happened to the session."""
+        self._break_paragraph()
+        sys.stderr.write(f"{notice}\n\n")
+        sys.stderr.flush()
+
+    def end(self) -> None:
+        self._write("\n")
+
+    def get_text(self) -> str:
+        return "".join(self._chunks)
+
+    def _break_paragraph(self) -> None:
+        if len(self._chunks) > 0:
+            self._write("\n\n")
+        self._is_paragraph_closed = False
+
+    def _write(self, text: str) -> None:
+        self._chunks.append(text)
+
+        if self._char_delay == 0.0:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+            return
+
+        for char in text:
+            sys.stdout.write(char)
+            sys.stdout.flush()
+            time.sleep(self._char_delay)
 
 
 def _resolve_claude_tools(capabilities: list[str]) -> str:
