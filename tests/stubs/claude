@@ -7,7 +7,15 @@ import re
 import sys
 from pathlib import Path
 
-import protocol
+from protocol import (
+    CLAUDE_ARGV_ENV,
+    CLAUDE_SCRIPT_ENV,
+    CLAUDE_STDIN_ENV,
+    ClaudeError,
+    ClaudeScript,
+    ClaudeSuccess,
+    SessionTurn,
+)
 
 ERROR_RETURNCODE = 1
 
@@ -15,8 +23,8 @@ ERROR_RETURNCODE = 1
 def main() -> None:
     """Record the call lm made, then play the one run the test scripted."""
     prompt = sys.argv[1]
-    Path(os.environ[protocol.CLAUDE_ARGV_ENV]).write_text(json.dumps(sys.argv[1:]))
-    Path(os.environ[protocol.CLAUDE_STDIN_ENV]).write_text(sys.stdin.read())
+    Path(os.environ[CLAUDE_ARGV_ENV]).write_text(json.dumps(sys.argv[1:]))
+    Path(os.environ[CLAUDE_STDIN_ENV]).write_text(sys.stdin.read())
 
     if "--session-id" in sys.argv:
         session_id = sys.argv[sys.argv.index("--session-id") + 1]
@@ -32,11 +40,9 @@ def main() -> None:
     project_path.mkdir(parents=True, exist_ok=True)
 
     with (project_path / f"{session_id}.jsonl").open("a") as session_file:
-        session_file.write(protocol.SessionTurn(prompt=prompt).to_line())
+        session_file.write(SessionTurn(prompt=prompt).to_line())
 
-    script = protocol.ClaudeScript.from_json(
-        Path(os.environ[protocol.CLAUDE_SCRIPT_ENV]).read_text()
-    )
+    script = ClaudeScript.from_json(Path(os.environ[CLAUDE_SCRIPT_ENV]).read_text())
 
     if script.text != "":
         _write_event(
@@ -50,9 +56,9 @@ def main() -> None:
         )
 
     match script.ending:
-        case protocol.ClaudeSuccess():
+        case ClaudeSuccess():
             _write_event({"type": "result", "subtype": "success", "is_error": False})
-        case protocol.ClaudeError(subtype=subtype, errors=errors):
+        case ClaudeError(subtype=subtype, errors=errors):
             _write_event(
                 {
                     "type": "result",

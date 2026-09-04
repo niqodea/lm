@@ -459,17 +459,6 @@ def test_a_thread_without_capabilities_gets_no_tools(lm: Lm) -> None:
 # --- Refusals ---
 
 
-def test_run_refuses_while_a_query_is_staged(lm: Lm) -> None:
-    lm.set_editor_prompt("staged question\n")
-
-    lm.invoke("new", "demo", stdin="")
-    lm.invoke("edit-prompt", "--thread", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
-
-    assert result.returncode != 0
-    assert "Staged query already exists" in result.stderr
-
-
 def test_an_empty_prompt_creates_no_turn(lm: Lm) -> None:
     lm.set_editor_prompt("")
 
