@@ -164,6 +164,10 @@ class Lm:
         lines = session_path.read_text().splitlines()
         return [protocol.SessionTurn.from_line(line).prompt for line in lines]
 
+    def get_claude_projects_path(self) -> Path:
+        """Where claude keeps the session files lm moves into its threads."""
+        return self._root_path / "home" / ".claude" / "projects"
+
     def get_thread_path(self, thread: str) -> Path:
         return self._root_path / "data" / "threads" / thread
 

@@ -726,6 +726,19 @@ def test_committed_turn_files_are_read_only(lm: Lm) -> None:
     assert (turn_path / "response.md").stat().st_mode & 0o222 == 0
 
 
+def test_a_turn_takes_the_whole_session_claude_wrote(lm: Lm) -> None:
+    lm.set_editor_prompt("a question\n")
+    lm.set_claude_result_success("an answer")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.invoke("run", "--thread", "demo", stdin="")
+
+    # Claude is still writing the session when it reports its result, so a turn
+    # that moves the file without waiting takes half of it and leaves the rest
+    assert lm.get_session_prompts("demo") == ["a question"]
+    assert list(lm.get_claude_projects_path().iterdir()) == []
+
+
 # --- Editor-specific buffer layout ---
 
 

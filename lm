@@ -987,7 +987,9 @@ def _execute_turn(
             "--verbose",
         ]
 
-        process = subprocess.Popen(  # noqa: S603  (command is not user-provided)
+        # Claude keeps writing the session file after the result it ends on, and
+        # leaving this block waits for it to finish before the file is moved
+        with subprocess.Popen(  # noqa: S603  (command is not user-provided)
             command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -996,20 +998,21 @@ def _execute_turn(
             # Still, as long as we set CWD to a bare directory, no CLAUDE.md will be
             # picked up.
             cwd=thread.scratch_cwd_path,
-        )
+        ) as process:
+            if process.stdin is None:
+                sys.exit("Unexpected error: Claude standard input not captured")
 
-        if process.stdin is None:
-            sys.exit("Unexpected error: Claude standard input not captured")
+            process.stdin.write(piped_stdin)
+            process.stdin.close()
 
-        process.stdin.write(piped_stdin)
-        process.stdin.close()
+            # Clear screen, helps keeping text stationary as it streams.
+            sys.stderr.write("\033[2J\033[H")
+            sys.stderr.write(f"Running prompt: {prompt_summary}\n\n")
+            sys.stderr.flush()
 
-        # Clear screen, helps keeping text stationary as it streams.
-        sys.stderr.write("\033[2J\033[H")
-        sys.stderr.write(f"Running prompt: {prompt_summary}\n\n")
-        sys.stderr.flush()
-
-        return _read_response(process, thread_name=thread.name, char_delay=char_delay)
+            return _read_response(
+                process, thread_name=thread.name, char_delay=char_delay
+            )
 
 
 def _read_response(
