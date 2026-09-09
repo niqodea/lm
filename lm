@@ -71,6 +71,7 @@ STATUS_STAGED_LABEL_WIDTH = 14
 SETTINGS_PATHNAME = "settings.toml"
 PRESETS_PATHNAME = "presets"
 SETTINGS_CHAR_DELAY_KEY = "char_delay"
+SETTINGS_MODELS_KEY = "models"
 
 
 # --- commands
@@ -121,7 +122,7 @@ def main() -> None:
     new_parser.add_argument(
         "-m",
         "--claude-model",
-        help="Claude model to use for this thread.",
+        help="Claude model to use for this thread, or an alias from settings.",
         default=DEFAULT_CLAUDE_MODEL,
     )
     new_parser.add_argument(
@@ -280,6 +281,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
 
 def _cmd_new(args: argparse.Namespace) -> None:
+    config_path = _get_config_path(missing_ok=False)
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
@@ -295,7 +297,7 @@ def _cmd_new(args: argparse.Namespace) -> None:
 
     _create_thread(
         path,
-        claude_model=claude_model,
+        claude_model=_resolve_claude_model(claude_model, config_path),
         claude_effort=claude_effort,
         claude_tools=_resolve_claude_tools(capabilities),
     )
@@ -1401,6 +1403,20 @@ def _get_char_delay_from_settings(config_path: Path) -> float:
     if not isinstance(char_delay, float):
         sys.exit(f"Setting {SETTINGS_CHAR_DELAY_KEY} must be a float: {char_delay}")
     return char_delay
+
+
+def _resolve_claude_model(model: str, config_path: Path) -> str:
+    settings_path = config_path / SETTINGS_PATHNAME
+    settings = tomllib.loads(settings_path.read_text())
+    aliases = settings.get(SETTINGS_MODELS_KEY, {})
+    if not isinstance(aliases, dict):
+        sys.exit(f"Setting {SETTINGS_MODELS_KEY} must be a table: {aliases}")
+    if model not in aliases:
+        return model
+    aliased = aliases[model]
+    if not isinstance(aliased, str):
+        sys.exit(f"Model alias {model} must be a string: {aliased}")
+    return aliased
 
 
 def _write_read_only(path: Path, content: str) -> None:

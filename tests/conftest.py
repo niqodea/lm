@@ -134,6 +134,10 @@ class Lm:
     def set_selected_thread(self, name: str) -> None:
         self._get_stub_file_path(protocol.FZF_MATCH_ENV).write_text(name)
 
+    def set_model_alias(self, alias: str, model: str) -> None:
+        settings_path = self._root_path / "config" / "lm" / "settings.toml"
+        settings_path.write_text(f'[models]\n{alias} = "{model}"\n')
+
     def set_preset(self, name: str, body: str) -> None:
         presets_path = self._root_path / "config" / "lm" / "presets"
         (presets_path / f"{name}.md").write_text(body)

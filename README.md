@@ -139,6 +139,21 @@ lm status --thread mytopic               # see what is staged
 
 Store reusable instructions in `~/.config/lm/presets/<name>.md`. They're prepended to the editor buffer — refine or extend before sending.
 
+## Model aliases
+
+Name the models you reach for in `~/.config/lm/settings.toml`:
+
+```toml
+[models]
+fast = "claude-haiku-4-5"
+```
+
+```sh
+lm new quick -m fast
+```
+
+An alias is resolved when the thread is created, so the thread keeps the model it was made with even if you point the alias elsewhere later.
+
 ## How it works
 
 `lm` shells out to `claude --print --output-format stream-json` and streams the text back as it arrives.

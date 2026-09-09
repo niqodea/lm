@@ -11,7 +11,6 @@
 - Consider exposing json structured output as option.
   What would be the best interface for it?
 - Consider whether to have more than just data as local, like git does (e.g. config overrides).
-- Have a setting to specify aliases for models.
 
 # Aspirational
 - Metacommands for thread management (Claude understands which thread to clean, which to rename, etc. and comes up with a plan).
