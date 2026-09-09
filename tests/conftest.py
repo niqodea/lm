@@ -142,6 +142,14 @@ class Lm:
         presets_path = self._root_path / "config" / "lm" / "presets"
         (presets_path / f"{name}.md").write_text(body)
 
+    def set_default_system_prompt(self, body: str) -> None:
+        config_path = self._root_path / "config" / "lm"
+        (config_path / "default-system-prompt.md").write_text(body)
+
+    def set_system_prompt(self, name: str, body: str) -> None:
+        system_prompts_path = self._root_path / "config" / "lm" / "system-prompts"
+        (system_prompts_path / f"{name}.md").write_text(body)
+
     def get_editor_buffer(self) -> str:
         """Return the buffer lm handed the editor, before it was edited."""
         return self._get_stub_file_path(protocol.EDITOR_BUFFER_ENV).read_text()

@@ -44,10 +44,6 @@ CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 CAPABILITY_CLAUDE_TOOLS = {"web": ("WebFetch", "WebSearch")}
 
-SYSTEM_PROMPT = """\
-You are a helpful assistant. Answer the question concisely.
-"""
-
 # A failed turn reports itself as a result event with one of these subtypes.
 # Ref: https://code.claude.com/docs/en/agent-sdk/agent-loop#handle-the-result
 CLAUDE_ERROR_SUBTYPE_REASONS = {
@@ -70,6 +66,12 @@ STATUS_STAGED_LABEL_WIDTH = 14
 
 SETTINGS_PATHNAME = "settings.toml"
 PRESETS_PATHNAME = "presets"
+SYSTEM_PROMPTS_PATHNAME = "system-prompts"
+DEFAULT_SYSTEM_PROMPT_PATHNAME = "default-system-prompt.md"
+
+DEFAULT_SYSTEM_PROMPT = """\
+You are a helpful assistant. Answer the question concisely.
+"""
 SETTINGS_CHAR_DELAY_KEY = "char_delay"
 SETTINGS_MODELS_KEY = "models"
 
@@ -131,6 +133,11 @@ def main() -> None:
         help="Claude effort level to use for this thread.",
         choices=CLAUDE_EFFORTS,
         default=DEFAULT_CLAUDE_EFFORT,
+    )
+    new_parser.add_argument(
+        "-S",
+        "--system-prompt",
+        help="Name of the system prompt to use for this thread.",
     )
     new_parser.add_argument(
         "-w",
@@ -232,6 +239,9 @@ def _cmd_init(_: argparse.Namespace) -> None:
         config_path.mkdir()
         (config_path / SETTINGS_PATHNAME).touch()
         (config_path / PRESETS_PATHNAME).mkdir()
+        (config_path / SYSTEM_PROMPTS_PATHNAME).mkdir()
+        default_system_prompt_path = config_path / DEFAULT_SYSTEM_PROMPT_PATHNAME
+        default_system_prompt_path.write_text(DEFAULT_SYSTEM_PROMPT)
 
     if not data_path.exists():
         data_path.mkdir()
@@ -248,7 +258,9 @@ def _cmd_run(args: argparse.Namespace) -> None:
     attachments = [_get_attachment(a) for a in args.attachments]
 
     try:
-        thread, prompt = _resolve_thread_and_prompt(args, threads_path, draft=draft)
+        thread, prompt = _resolve_thread_and_prompt(
+            args, threads_path, config_path=config_path, draft=draft
+        )
     except _EmptyPromptError:
         sys.exit("Prompt is empty, exiting.")
 
@@ -289,6 +301,12 @@ def _cmd_new(args: argparse.Namespace) -> None:
     capabilities: list[str] = args.capabilities
     claude_model: str = args.claude_model
     claude_effort: str = args.claude_effort
+    system_prompt_name: str | None = args.system_prompt
+    claude_system_prompt = (
+        _get_default_system_prompt(config_path)
+        if system_prompt_name is None
+        else _get_system_prompt(system_prompt_name, config_path)
+    )
 
     _assert_thread_name_is_valid(name)
 
@@ -299,6 +317,7 @@ def _cmd_new(args: argparse.Namespace) -> None:
         path,
         claude_model=_resolve_claude_model(claude_model, config_path),
         claude_effort=claude_effort,
+        claude_system_prompt=claude_system_prompt,
         claude_tools=_resolve_claude_tools(capabilities),
     )
 
@@ -334,6 +353,7 @@ def _cmd_rm(args: argparse.Namespace) -> None:
 
     thread.model_path.unlink()
     thread.effort_path.unlink()
+    thread.system_prompt_path.unlink()
     thread.tools_path.unlink()
     thread.session_path.unlink(missing_ok=True)
     thread.scratch_cwd_path.rmdir()
@@ -471,7 +491,9 @@ def _cmd_chat(args: argparse.Namespace) -> None:
     threads_path = data_path / THREADS_PATHNAME
 
     try:
-        thread, prompt = _resolve_thread_and_prompt(args, threads_path, draft=None)
+        thread, prompt = _resolve_thread_and_prompt(
+            args, threads_path, config_path=config_path, draft=None
+        )
     except _EmptyPromptError:
         return
 
@@ -534,6 +556,10 @@ class _Thread:
     @property
     def effort_path(self) -> Path:
         return self.claude_path / "effort"
+
+    @property
+    def system_prompt_path(self) -> Path:
+        return self.claude_path / "system-prompt"
 
     @property
     def tools_path(self) -> Path:
@@ -631,7 +657,12 @@ def _get_threads(threads_path: Path) -> list[_Thread]:
 
 
 def _create_thread(
-    path: Path, *, claude_model: str, claude_effort: str, claude_tools: str
+    path: Path,
+    *,
+    claude_model: str,
+    claude_effort: str,
+    claude_system_prompt: str,
+    claude_tools: str,
 ) -> _Thread:
     thread = _Thread(path)
 
@@ -642,6 +673,7 @@ def _create_thread(
     # We tie these to the thread for simplicity and not to bust cache
     _write_read_only(thread.model_path, claude_model)
     _write_read_only(thread.effort_path, claude_effort)
+    _write_read_only(thread.system_prompt_path, claude_system_prompt)
     _write_read_only(thread.tools_path, claude_tools)
 
     return thread
@@ -802,7 +834,11 @@ class _HistoryEntry:
 
 
 def _resolve_thread_and_prompt(
-    args: argparse.Namespace, threads_path: Path, *, draft: str | None
+    args: argparse.Namespace,
+    threads_path: Path,
+    *,
+    config_path: Path,
+    draft: str | None,
 ) -> tuple[_Thread, str]:
     if _has_thread_arg(args):
         thread = _get_thread(args, threads_path)
@@ -823,6 +859,7 @@ def _resolve_thread_and_prompt(
         threads_path / thread_timestamp,
         claude_model=DEFAULT_CLAUDE_MODEL,
         claude_effort=DEFAULT_CLAUDE_EFFORT,
+        claude_system_prompt=_get_default_system_prompt(config_path),
         claude_tools="",
     )
     return thread, prompt
@@ -967,10 +1004,10 @@ def _execute_turn(
             thread.model_path.read_text(),
             "--effort",
             thread.effort_path.read_text(),
+            "--system-prompt",
+            thread.system_prompt_path.read_text(),
             *claude_session_args,
             # Simplify behavior
-            "--system-prompt",
-            SYSTEM_PROMPT,
             "--print",
             # Keeps user config out; unlike --bare, it leaves OAuth alone
             "--safe-mode",
@@ -1289,6 +1326,9 @@ def _format_thread_summary_line(thread: _Thread) -> str:
 
 
 def _format_status(thread: _Thread) -> str:
+    system_prompt = _summarize_text(
+        thread.system_prompt_path.read_text(), max_length=PROMPT_SUMMARY_MAX_LENGTH
+    )
     claude_tools = thread.tools_path.read_text()
     tools = "none" if claude_tools == "" else ", ".join(claude_tools.split(","))
 
@@ -1296,6 +1336,7 @@ def _format_status(thread: _Thread) -> str:
         f"{'Thread:':<{STATUS_LABEL_WIDTH}}{thread.name}",
         f"{'Model:':<{STATUS_LABEL_WIDTH}}{thread.model_path.read_text()}",
         f"{'Effort:':<{STATUS_LABEL_WIDTH}}{thread.effort_path.read_text()}",
+        f"{'System:':<{STATUS_LABEL_WIDTH}}{system_prompt}",
         f"{'Tools:':<{STATUS_LABEL_WIDTH}}{tools}",
         f"{'Turns:':<{STATUS_LABEL_WIDTH}}{_get_turns_count(thread)}",
         "",
@@ -1396,6 +1437,21 @@ def _get_preset(name: str, config_path: Path) -> str:
     path = presets_path / f"{name}.md"
     if not path.exists():
         sys.exit(f"Preset not found: {path}")
+    return path.read_text()
+
+
+def _get_default_system_prompt(config_path: Path) -> str:
+    path = config_path / DEFAULT_SYSTEM_PROMPT_PATHNAME
+    if not path.exists():
+        sys.exit(f"Default system prompt not found: {path}")
+    return path.read_text()
+
+
+def _get_system_prompt(name: str, config_path: Path) -> str:
+    system_prompts_path = config_path / SYSTEM_PROMPTS_PATHNAME
+    path = system_prompts_path / f"{name}.md"
+    if not path.exists():
+        sys.exit(f"System prompt not found: {path}")
     return path.read_text()
 
 
