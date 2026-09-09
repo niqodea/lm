@@ -25,7 +25,9 @@ For agentic work on a codebase (tools, edits, permissions), keep using `claude`.
 ```
 ~/.config/lm/
   settings.toml
+  default-system-prompt.md
   presets/
+  system-prompts/
 
 ~/.local/share/lm/threads/<name>/
   00/
@@ -121,6 +123,7 @@ Create a thread with specific capabilities or model:
 lm new research --with web
 lm new fast --claude-model claude-haiku-4-5
 lm new hard --claude-effort high
+lm new pirate --system-prompt pirate
 ```
 
 ### Staged workflow
@@ -153,6 +156,17 @@ lm new quick -m fast
 ```
 
 An alias is resolved when the thread is created, so the thread keeps the model it was made with even if you point the alias elsewhere later.
+
+## System prompts
+
+Every thread gets a system prompt. Name one from `~/.config/lm/system-prompts/<name>.md`, or get the one in `~/.config/lm/default-system-prompt.md`:
+
+```sh
+lm new pirate --system-prompt pirate
+lm new plain
+```
+
+`lm init` writes the default prompt for you to edit. Both are read when the thread is created, so a thread keeps the text it was made with.
 
 ## How it works
 

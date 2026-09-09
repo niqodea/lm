@@ -543,6 +543,31 @@ def test_thread_effort_reaches_claude(lm: Lm) -> None:
     assert argv[argv.index("--effort") + 1] == "high"
 
 
+def test_the_default_system_prompt_reaches_a_thread_that_names_none(lm: Lm) -> None:
+    lm.set_editor_prompt("hello\n")
+    lm.set_claude_result_success("hi")
+    lm.set_default_system_prompt("Answer as a sommelier.")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.invoke("run", "--thread", "demo", stdin="")
+
+    argv = lm.get_claude_argv()
+    assert argv[argv.index("--system-prompt") + 1] == "Answer as a sommelier."
+
+
+def test_thread_system_prompt_reaches_claude(lm: Lm) -> None:
+    lm.set_editor_prompt("hello\n")
+    lm.set_claude_result_success("hi")
+
+    lm.set_system_prompt("pirate", "Answer as a pirate.")
+
+    lm.invoke("new", "demo", "--system-prompt", "pirate", stdin="")
+    lm.invoke("run", "--thread", "demo", stdin="")
+
+    argv = lm.get_claude_argv()
+    assert argv[argv.index("--system-prompt") + 1] == "Answer as a pirate."
+
+
 def test_thread_capability_reaches_claude(lm: Lm) -> None:
     lm.set_editor_prompt("hello\n")
     lm.set_claude_result_success("hi")
@@ -555,13 +580,24 @@ def test_thread_capability_reaches_claude(lm: Lm) -> None:
 
 
 def test_status_shows_the_thread_settings(lm: Lm) -> None:
+    lm.set_system_prompt("pirate", "Answer as a pirate.")
+
     lm.invoke(
-        "new", "demo", "--claude-model", "claude-haiku-4-5", "--with", "web", stdin=""
+        "new",
+        "demo",
+        "--claude-model",
+        "claude-haiku-4-5",
+        "--system-prompt",
+        "pirate",
+        "--with",
+        "web",
+        stdin="",
     )
     result = lm.invoke("status", "--thread", "demo", stdin="")
 
     assert result.returncode == 0
     assert "claude-haiku-4-5" in result.stdout
+    assert "Answer as a pirate." in result.stdout
     assert "WebFetch" in result.stdout
 
 
@@ -691,6 +727,14 @@ def test_an_unnamed_thread_is_rejected(lm: Lm) -> None:
 
     assert result.returncode != 0
     assert "Invalid thread name" in result.stderr
+
+
+def test_an_unknown_system_prompt_is_rejected(lm: Lm) -> None:
+    result = lm.invoke("new", "demo", "--system-prompt", "missing", stdin="")
+
+    assert result.returncode != 0
+    assert "System prompt not found" in result.stderr
+    assert not lm.get_thread_path("demo").exists()
 
 
 def test_an_unknown_preset_is_rejected(lm: Lm) -> None:
