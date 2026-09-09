@@ -7,7 +7,6 @@
   Since we save it on disk anyway.
 - Check what the Claude json events look like and extract other useful stuff.
 - Differentate prompt (text part) vs query (the whole) from the POV of the user.
-- Address conflict of fzf's bottom-up and less's top-down for thread listing.
 - Consider exposing json structured output as option.
   What would be the best interface for it?
 - Consider whether to have more than just data as local, like git does (e.g. config overrides).
