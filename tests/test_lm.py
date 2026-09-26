@@ -4,8 +4,6 @@ Ordered from the plainest intended usage down to the corners: the core loop
 first, then the documented workflows, then refusals and details.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from .conftest import Lm

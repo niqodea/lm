@@ -72,7 +72,7 @@ class ClaudeError:
     """End the turn as a run that failed this way."""
 
     subtype: str
-    errors: list[str]
+    errors: tuple[str, ...]
 
 
 # A run that ends with neither stops without reporting a result at all
@@ -83,7 +83,7 @@ ClaudeEnding = ClaudeSuccess | ClaudeError | None
 class ClaudeScript:
     """One scripted claude run: play these events, then end the turn this way."""
 
-    events: list[ClaudeEvent]
+    events: tuple[ClaudeEvent, ...]
     ending: ClaudeEnding
 
     def to_json(self) -> str:
@@ -105,7 +105,7 @@ class ClaudeScript:
             case ClaudeSuccess():
                 ending = {"kind": "success"}
             case ClaudeError(subtype=subtype, errors=errors):
-                ending = {"kind": "error", "subtype": subtype, "errors": errors}
+                ending = {"kind": "error", "subtype": subtype, "errors": list(errors)}
             case None:
                 ending = None
             case _:
@@ -131,12 +131,12 @@ class ClaudeScript:
             case {"kind": "success"}:
                 ending = ClaudeSuccess()
             case {"kind": "error", "subtype": subtype, "errors": errors}:
-                ending = ClaudeError(subtype=subtype, errors=errors)
+                ending = ClaudeError(subtype=subtype, errors=tuple(errors))
             case None:
                 ending = None
             case _:
                 raise ValueError(f"Unknown ending in claude script: {script['ending']}")
-        return ClaudeScript(events=events, ending=ending)
+        return ClaudeScript(events=tuple(events), ending=ending)
 
 
 # --- what the claude stub records in a session file ---
@@ -166,11 +166,11 @@ _PROMPT_SEPARATOR = "\n<!-- next prompt -->\n"
 class PromptQueue:
     """The prompts an editor stub types, one per run, in the order it takes them."""
 
-    prompts: list[str]
+    prompts: tuple[str, ...]
 
     def to_text(self) -> str:
         return _PROMPT_SEPARATOR.join(self.prompts)
 
     @staticmethod
     def from_text(text: str) -> PromptQueue:
-        return PromptQueue(prompts=text.split(_PROMPT_SEPARATOR))
+        return PromptQueue(prompts=tuple(text.split(_PROMPT_SEPARATOR)))

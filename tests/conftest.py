@@ -1,7 +1,5 @@
 """Sandbox for driving the lm CLI end to end."""
 
-from __future__ import annotations
-
 import json
 import os
 import subprocess
@@ -79,12 +77,14 @@ class Lm:
 
     def set_editor_prompts(self, *prompts: str) -> None:
         """Queue one prompt per editor run, so a chat loop ends when they run out."""
-        queued = protocol.PromptQueue(prompts=list(prompts)).to_text()
+        queued = protocol.PromptQueue(prompts=prompts).to_text()
         self._get_stub_file_path(protocol.EDITOR_PROMPTS_ENV).write_text(queued)
 
     def set_claude_result_success(self, text: str) -> None:
         """Make the claude stub stream the text, then end the turn successfully."""
-        self._set_claude_run([protocol.ClaudeText(text=text)], protocol.ClaudeSuccess())
+        self._set_claude_run(
+            (protocol.ClaudeText(text=text),), protocol.ClaudeSuccess()
+        )
 
     def set_claude_result_success_with_tool_calls(
         self,
@@ -94,14 +94,14 @@ class Lm:
     ) -> None:
         """Make the claude stub call these (name, arguments) tools mid-response."""
         self._set_claude_run(
-            [
+            (
                 protocol.ClaudeText(text=text_before),
                 *[
                     protocol.ClaudeToolCall(name=name, arguments=arguments)
                     for name, arguments in tool_calls
                 ],
                 protocol.ClaudeText(text=text),
-            ],
+            ),
             protocol.ClaudeSuccess(),
         )
 
@@ -110,11 +110,11 @@ class Lm:
     ) -> None:
         """Make the claude stub compact part way through the response."""
         self._set_claude_run(
-            [
+            (
                 protocol.ClaudeText(text=text_before),
                 protocol.ClaudeCompaction(pre_tokens=pre_tokens),
                 protocol.ClaudeText(text=text),
-            ],
+            ),
             protocol.ClaudeSuccess(),
         )
 
@@ -123,13 +123,13 @@ class Lm:
     ) -> None:
         """Make the claude stub stream the text, then end the turn with an error."""
         self._set_claude_run(
-            [protocol.ClaudeText(text=text)],
-            protocol.ClaudeError(subtype=subtype, errors=errors),
+            (protocol.ClaudeText(text=text),),
+            protocol.ClaudeError(subtype=subtype, errors=tuple(errors)),
         )
 
     def set_claude_result_absent(self, text: str) -> None:
         """Make the claude stub stream the text, then stop without a result."""
-        self._set_claude_run([protocol.ClaudeText(text=text)], None)
+        self._set_claude_run((protocol.ClaudeText(text=text),), None)
 
     def set_selected_thread(self, name: str) -> None:
         self._get_stub_file_path(protocol.FZF_MATCH_ENV).write_text(name)
@@ -186,7 +186,7 @@ class Lm:
         return sorted(self.get_thread_path(thread).glob("[0-9]*"))[turn_idx]
 
     def _set_claude_run(
-        self, events: list[protocol.ClaudeEvent], ending: protocol.ClaudeEnding
+        self, events: tuple[protocol.ClaudeEvent, ...], ending: protocol.ClaudeEnding
     ) -> None:
         script = protocol.ClaudeScript(events=events, ending=ending)
         path = self._get_stub_file_path(protocol.CLAUDE_SCRIPT_ENV)

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3.14
 """CLI tool for interacting with Claude from the terminal."""
 
-from __future__ import annotations
-
 import argparse
 import datetime
 import json
@@ -16,7 +14,7 @@ import tomllib
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -33,8 +31,8 @@ ATTACHMENT_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 
 SCISSORS_LINE = "<!-- ------------------------ >8 ------------------------ -->"
 
-INSERT_MODE_EDITORS = {"vim", "nvim"}
-PROMPT_IS_LAST_EDITORS = {"vi", "vim", "nvim"}
+INSERT_MODE_EDITORS = frozenset({"vim", "nvim"})
+PROMPT_IS_LAST_EDITORS = frozenset({"vi", "vim", "nvim"})
 
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 DEFAULT_CLAUDE_EFFORT = "medium"
@@ -89,13 +87,13 @@ def main() -> None:
         "init",
         help="Initialize configuration and data directories.",
     )
-    init_parser.set_defaults(func=_cmd_init)
+    init_parser.set_defaults(func=_execute_init)
 
     run_parser = subparsers.add_parser(
         "run",
         help="Run inference on a prompt.",
     )
-    run_parser.set_defaults(func=_cmd_run)
+    run_parser.set_defaults(func=_execute_run)
     _add_thread_args(run_parser, required=False)
     run_parser.add_argument(
         "-p",
@@ -116,7 +114,7 @@ def main() -> None:
         "new",
         help="Start a new thread.",
     )
-    new_parser.set_defaults(func=_cmd_new)
+    new_parser.set_defaults(func=_execute_new)
     new_parser.add_argument(
         "name",
         help="Thread name.",
@@ -153,7 +151,7 @@ def main() -> None:
         "rename",
         help="Rename a thread.",
     )
-    rename_parser.set_defaults(func=_cmd_rename)
+    rename_parser.set_defaults(func=_execute_rename)
     _add_thread_args(rename_parser, required=True)
     rename_parser.add_argument(
         "dst",
@@ -164,14 +162,14 @@ def main() -> None:
         "rm",
         help="Delete a thread.",
     )
-    rm_parser.set_defaults(func=_cmd_rm)
+    rm_parser.set_defaults(func=_execute_rm)
     _add_thread_args(rm_parser, required=True)
 
     edit_prompt_parser = subparsers.add_parser(
         "edit-prompt",
         help="Edit prompt for the staged query.",
     )
-    edit_prompt_parser.set_defaults(func=_cmd_edit_prompt)
+    edit_prompt_parser.set_defaults(func=_execute_edit_prompt)
     _add_thread_args(edit_prompt_parser, required=True)
     edit_prompt_parser.add_argument(
         "-p",
@@ -183,7 +181,7 @@ def main() -> None:
         "attach",
         help="Add attachments for the staged query.",
     )
-    attach_parser.set_defaults(func=_cmd_attach)
+    attach_parser.set_defaults(func=_execute_attach)
     _add_thread_args(attach_parser, required=True)
     attach_parser.add_argument(
         "attachments",
@@ -196,31 +194,31 @@ def main() -> None:
         "commit",
         help="Run inference on the staged query.",
     )
-    commit_parser.set_defaults(func=_cmd_commit)
+    commit_parser.set_defaults(func=_execute_commit)
     _add_thread_args(commit_parser, required=True)
 
     clear_parser = subparsers.add_parser(
         "clear",
         help="Clear the staged query without running inference.",
     )
-    clear_parser.set_defaults(func=_cmd_clear)
+    clear_parser.set_defaults(func=_execute_clear)
     _add_thread_args(clear_parser, required=True)
 
     ls_parser = subparsers.add_parser("ls", help="List threads.")
-    ls_parser.set_defaults(func=_cmd_ls)
+    ls_parser.set_defaults(func=_execute_ls)
 
     show_parser = subparsers.add_parser("show", help="Show the turns of a thread.")
-    show_parser.set_defaults(func=_cmd_show)
+    show_parser.set_defaults(func=_execute_show)
     _add_thread_args(show_parser, required=True)
 
     status_parser = subparsers.add_parser(
         "status", help="Show the settings of a thread and its staged query."
     )
-    status_parser.set_defaults(func=_cmd_status)
+    status_parser.set_defaults(func=_execute_status)
     _add_thread_args(status_parser, required=True)
 
     chat_parser = subparsers.add_parser("chat", help="Loop: edit prompt, run, repeat.")
-    chat_parser.set_defaults(func=_cmd_chat)
+    chat_parser.set_defaults(func=_execute_chat)
     _add_thread_args(chat_parser, required=False)
 
     args = parser.parse_args()
@@ -231,7 +229,7 @@ def main() -> None:
         sys.exit(INTERRUPT_EXIT_CODE)
 
 
-def _cmd_init(_: argparse.Namespace) -> None:
+def _execute_init(_: argparse.Namespace) -> None:
     config_path = _get_config_path(missing_ok=True)
     data_path = _get_data_path(missing_ok=True)
 
@@ -248,7 +246,7 @@ def _cmd_init(_: argparse.Namespace) -> None:
         (data_path / THREADS_PATHNAME).mkdir()
 
 
-def _cmd_run(args: argparse.Namespace) -> None:
+def _execute_run(args: argparse.Namespace) -> None:
     config_path = _get_config_path(missing_ok=False)
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
@@ -258,8 +256,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
     attachments = [_get_attachment(a) for a in args.attachments]
 
     try:
-        thread, prompt = _resolve_thread_and_prompt(
-            args, threads_path, config_path=config_path, draft=draft
+        thread, prompt = _get_or_create_thread_with_prompt(
+            args.thread_choice, threads_path, config_path=config_path, draft=draft
         )
     except _EmptyPromptError:
         sys.exit("Prompt is empty, exiting.")
@@ -281,7 +279,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
         attachments_path.mkdir()
         _write_attachments(attachments, attachments_path)
 
-    response = _execute_turn(
+    response = _handle_turn(
         thread,
         prompt=prompt,
         piped_stdin=piped_stdin,
@@ -292,7 +290,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
     _commit_staged(thread, response)
 
 
-def _cmd_new(args: argparse.Namespace) -> None:
+def _execute_new(args: argparse.Namespace) -> None:
     config_path = _get_config_path(missing_ok=False)
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
@@ -318,15 +316,17 @@ def _cmd_new(args: argparse.Namespace) -> None:
         claude_model=_resolve_claude_model(claude_model, config_path),
         claude_effort=claude_effort,
         claude_system_prompt=claude_system_prompt,
-        claude_tools=_resolve_claude_tools(capabilities),
+        claude_tools=",".join(
+            t for c in capabilities for t in CAPABILITY_CLAUDE_TOOLS[c]
+        ),
     )
 
 
-def _cmd_rename(args: argparse.Namespace) -> None:
+def _execute_rename(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    src = _get_thread(args, threads_path)
+    src = _get_thread(args.thread_choice, threads_path)
 
     _assert_thread_name_is_valid(args.dst)
 
@@ -337,11 +337,11 @@ def _cmd_rename(args: argparse.Namespace) -> None:
     src.path.rename(dst_path)
 
 
-def _cmd_rm(args: argparse.Namespace) -> None:
+def _execute_rm(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args, threads_path)
+    thread = _get_thread(args.thread_choice, threads_path)
 
     for turn_idx in range(_get_turns_count(thread)):
         _remove_turn(_Exchanges.Turn(thread.get_turn_path(turn_idx)))
@@ -362,12 +362,12 @@ def _cmd_rm(args: argparse.Namespace) -> None:
     thread.path.rmdir()
 
 
-def _cmd_edit_prompt(args: argparse.Namespace) -> None:
+def _execute_edit_prompt(args: argparse.Namespace) -> None:
     config_path = _get_config_path(missing_ok=False)
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args, threads_path)
+    thread = _get_thread(args.thread_choice, threads_path)
     preset_name: str | None = args.preset
 
     staged = _Exchanges.Query(thread.staged_path)
@@ -394,11 +394,11 @@ def _cmd_edit_prompt(args: argparse.Namespace) -> None:
     _write_prompt(staged, prompt)
 
 
-def _cmd_attach(args: argparse.Namespace) -> None:
+def _execute_attach(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args, threads_path)
+    thread = _get_thread(args.thread_choice, threads_path)
     attachments = [_get_attachment(a) for a in args.attachments]
 
     staged = _Exchanges.Query(thread.staged_path)
@@ -409,12 +409,12 @@ def _cmd_attach(args: argparse.Namespace) -> None:
     _write_attachments(attachments, attachments_path)
 
 
-def _cmd_commit(args: argparse.Namespace) -> None:
+def _execute_commit(args: argparse.Namespace) -> None:
     config_path = _get_config_path(missing_ok=False)
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args, threads_path)
+    thread = _get_thread(args.thread_choice, threads_path)
 
     staged = _Exchanges.Query(thread.staged_path)
     if not staged.path.exists():
@@ -432,7 +432,7 @@ def _cmd_commit(args: argparse.Namespace) -> None:
 
     attachments_path = staged.attachments_path
 
-    response = _execute_turn(
+    response = _handle_turn(
         thread,
         prompt=prompt,
         piped_stdin=piped_stdin,
@@ -443,11 +443,11 @@ def _cmd_commit(args: argparse.Namespace) -> None:
     _commit_staged(thread, response)
 
 
-def _cmd_clear(args: argparse.Namespace) -> None:
+def _execute_clear(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args, threads_path)
+    thread = _get_thread(args.thread_choice, threads_path)
 
     staged = _Exchanges.Query(thread.staged_path)
 
@@ -457,18 +457,19 @@ def _cmd_clear(args: argparse.Namespace) -> None:
     _remove_query(staged)
 
 
-def _cmd_ls(_: argparse.Namespace) -> None:
+def _execute_ls(_: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    _write_paged(_format_threads_summary(_get_threads(threads_path)))
+    threads = _get_threads(threads_path)
+    _write_paged("".join(f"{_format_thread_summary_line(t)}\n" for t in threads))
 
 
-def _cmd_show(args: argparse.Namespace) -> None:
+def _execute_show(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args, threads_path)
+    thread = _get_thread(args.thread_choice, threads_path)
 
     history = _build_history(thread)
     history_components = _format_history(history)
@@ -476,23 +477,23 @@ def _cmd_show(args: argparse.Namespace) -> None:
     _write_paged("\n\n".join(history_components))
 
 
-def _cmd_status(args: argparse.Namespace) -> None:
+def _execute_status(args: argparse.Namespace) -> None:
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args, threads_path)
+    thread = _get_thread(args.thread_choice, threads_path)
 
     _write_paged(_format_status(thread))
 
 
-def _cmd_chat(args: argparse.Namespace) -> None:
+def _execute_chat(args: argparse.Namespace) -> None:
     config_path = _get_config_path(missing_ok=False)
     data_path = _get_data_path(missing_ok=False)
     threads_path = data_path / THREADS_PATHNAME
 
     try:
-        thread, prompt = _resolve_thread_and_prompt(
-            args, threads_path, config_path=config_path, draft=None
+        thread, prompt = _get_or_create_thread_with_prompt(
+            args.thread_choice, threads_path, config_path=config_path, draft=None
         )
     except _EmptyPromptError:
         return
@@ -504,7 +505,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         staged.path.mkdir()
         _write_prompt(staged, prompt)
 
-        response = _execute_turn(
+        response = _handle_turn(
             thread,
             prompt=prompt,
             piped_stdin="",
@@ -515,7 +516,7 @@ def _cmd_chat(args: argparse.Namespace) -> None:
         _commit_staged(thread, response)
 
         history.append(
-            _HistoryEntry(prompt=prompt, attachment_names=[], response=response)
+            _HistoryEntry(prompt=prompt, attachment_names=(), response=response)
         )
         try:
             prompt = _edit_prompt(thread.editmsg_path, history=history, draft=None)
@@ -576,49 +577,73 @@ class _Thread:
         return self.path / f"{idx:02d}"
 
 
+@dataclass(frozen=True)
+class _NamedThread:
+    """The thread with this name."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class _LastThread:
+    """The thread with the most recent activity."""
+
+
+@dataclass(frozen=True)
+class _SelectedThread:
+    """The thread the user picks interactively."""
+
+
+type _ThreadChoice = _NamedThread | _LastThread | _SelectedThread
+
+
 def _add_thread_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
     group = parser.add_mutually_exclusive_group(required=required)
     group.add_argument(
         "-t",
         "--thread",
+        dest="thread_choice",
+        type=_NamedThread,
+        metavar="THREAD",
         help="Thread name.",
     )
     group.add_argument(
         "-l",
         "--last",
-        action="store_true",
+        dest="thread_choice",
+        action="store_const",
+        const=_LastThread(),
         help="Use the last active thread.",
     )
     group.add_argument(
         "-s",
         "--select",
-        action="store_true",
+        dest="thread_choice",
+        action="store_const",
+        const=_SelectedThread(),
         help="Pick a thread interactively.",
     )
 
 
-def _has_thread_arg(args: argparse.Namespace) -> bool:
-    return args.thread is not None or args.last is True or args.select is True
-
-
-def _get_thread(args: argparse.Namespace, threads_path: Path) -> _Thread:
-    if isinstance(args.thread, str):
-        thread_name = args.thread
-    elif args.last is True:
-        threads = _get_threads(threads_path)
-        if not threads:
-            sys.exit("No threads found.")
-        thread_name = threads[0].name
-    elif args.select is True:
-        thread_name = _select_thread(threads_path)
-    else:
-        raise RuntimeError("Thread not in arguments.")
+def _get_thread(choice: _ThreadChoice, threads_path: Path) -> _Thread:
+    match choice:
+        case _NamedThread(name=name):
+            thread_name = name
+        case _LastThread():
+            threads = _get_threads(threads_path)
+            if not threads:
+                sys.exit("No threads found.")
+            thread_name = threads[0].name
+        case _SelectedThread():
+            thread_name = _select_thread(threads_path)
+        case _:
+            assert_never(choice)
 
     _assert_thread_name_is_valid(thread_name)
 
     path = threads_path / thread_name
-
-    _assert_thread_exists(path)
+    if not path.exists():
+        sys.exit("Thread does not exist.")
 
     return _Thread(path)
 
@@ -691,11 +716,6 @@ def _get_turns_count(thread: _Thread) -> int:
 def _assert_thread_name_is_valid(name: str) -> None:
     if name == "" or name in {".", ".."} or name.startswith(".") or "/" in name:
         sys.exit(f"Invalid thread name: {name}")
-
-
-def _assert_thread_exists(path: Path) -> None:
-    if not path.exists():
-        sys.exit("Thread does not exist.")
 
 
 def _assert_thread_doesnt_exist(path: Path) -> None:
@@ -831,19 +851,19 @@ class _HistoryEntry:
     """One past exchange, as the editor shows it back."""
 
     prompt: str
-    attachment_names: list[str]
+    attachment_names: tuple[str, ...]
     response: str
 
 
-def _resolve_thread_and_prompt(
-    args: argparse.Namespace,
+def _get_or_create_thread_with_prompt(
+    choice: _ThreadChoice | None,
     threads_path: Path,
     *,
     config_path: Path,
     draft: str | None,
 ) -> tuple[_Thread, str]:
-    if _has_thread_arg(args):
-        thread = _get_thread(args, threads_path)
+    if choice is not None:
+        thread = _get_thread(choice, threads_path)
         _assert_no_staged_query(thread)
         history = _build_history(thread)
         return thread, _edit_prompt(thread.editmsg_path, history=history, draft=draft)
@@ -961,9 +981,9 @@ def _build_history(thread: _Thread) -> list[_HistoryEntry]:
         turn = _Exchanges.Turn(thread.get_turn_path(idx))
         attachments_path = turn.attachments_path
         if attachments_path.exists():
-            attachment_names = [p.name for p in attachments_path.iterdir()]
+            attachment_names = tuple(p.name for p in attachments_path.iterdir())
         else:
-            attachment_names = []
+            attachment_names = ()
         entries.append(
             _HistoryEntry(
                 prompt=turn.prompt_path.read_text(),
@@ -977,7 +997,7 @@ def _build_history(thread: _Thread) -> list[_HistoryEntry]:
 # --- inference
 
 
-def _execute_turn(
+def _handle_turn(
     thread: _Thread,
     *,
     prompt: str,
@@ -1198,10 +1218,6 @@ class _ResponseStream:
             time.sleep(self._char_delay)
 
 
-def _resolve_claude_tools(capabilities: list[str]) -> str:
-    return ",".join(t for c in capabilities for t in CAPABILITY_CLAUDE_TOOLS[c])
-
-
 class _ClaudeContext:
     def __init__(
         self,
@@ -1304,10 +1320,6 @@ def _write_paged(content: str) -> None:
         pager_proc.stdin.write(content)
 
 
-def _format_threads_summary(threads: list[_Thread]) -> str:
-    return "".join(f"{_format_thread_summary_line(thread)}\n" for thread in threads)
-
-
 def _format_thread_summary_line(thread: _Thread) -> str:
     name = _compress_text(thread.name, max_length=LS_NAME_LENGTH)
     turns_count = _get_turns_count(thread)
@@ -1350,7 +1362,7 @@ def _format_status(thread: _Thread) -> str:
         return "\n".join(lines) + "\n"
 
     staged_lines = _format_staged(staged)
-    # edit-prompt and attach both create the directory before they fill it
+    # The staged directory is created before anything is written into it
     if len(staged_lines) == 0:
         lines.append("Staged: empty.")
         return "\n".join(lines) + "\n"
