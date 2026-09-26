@@ -2,7 +2,7 @@
 
 The stubs run as their own processes, so each file below is one channel between
 a test and a stub. An environment variable holds the path of each, and the types
-here own what goes inside, so neither side has to know the other's format.
+here read and write what goes inside, so neither side parses the other's format.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ EDITOR_BUFFER_ENV = "LM_TEST_EDITOR_BUFFER"
 EDITOR_ARGV_ENV = "LM_TEST_EDITOR_ARGV"
 CLAUDE_ARGV_ENV = "LM_TEST_CLAUDE_ARGV"
 CLAUDE_STDIN_ENV = "LM_TEST_CLAUDE_STDIN"
+CLAUDE_SESSION_ENV = "LM_TEST_CLAUDE_SESSION"
 
 STUB_FILE_ENVS = (
     EDITOR_PROMPTS_ENV,
@@ -30,6 +31,7 @@ STUB_FILE_ENVS = (
     EDITOR_ARGV_ENV,
     CLAUDE_ARGV_ENV,
     CLAUDE_STDIN_ENV,
+    CLAUDE_SESSION_ENV,
 )
 
 # --- what the claude stub does for one run ---

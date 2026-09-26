@@ -127,7 +127,7 @@ def test_rename_allows_another_turn(lm: Lm) -> None:
         lm.get_turn_path("after", 1) / "prompt.md"
     ).read_text() == "second question\n"
     # The session followed the thread to its new name
-    assert lm.get_session_prompts("after") == ["first question", "second question"]
+    assert lm.get_claude_session_prompts() == ["first question", "second question"]
 
 
 def test_rm_deletes_a_thread(lm: Lm) -> None:
@@ -308,7 +308,7 @@ def test_a_second_turn_resumes_the_session(lm: Lm) -> None:
     lm.invoke("run", "--thread", "demo", stdin="")
 
     # The second turn grew the session the first turn started
-    assert lm.get_session_prompts("demo") == ["first question", "second question"]
+    assert lm.get_claude_session_prompts() == ["first question", "second question"]
 
 
 def test_threads_keep_separate_sessions(lm: Lm) -> None:
@@ -320,9 +320,13 @@ def test_threads_keep_separate_sessions(lm: Lm) -> None:
     lm.invoke("run", "--thread", "one", stdin="")
     lm.set_editor_prompt("question for two\n")
     lm.invoke("run", "--thread", "two", stdin="")
+    lm.set_editor_prompt("another question for one\n")
+    lm.invoke("run", "--thread", "one", stdin="")
 
-    assert lm.get_session_prompts("one") == ["question for one"]
-    assert lm.get_session_prompts("two") == ["question for two"]
+    assert lm.get_claude_session_prompts() == [
+        "question for one",
+        "another question for one",
+    ]
 
 
 def test_chat_runs_each_queued_prompt_as_a_turn(lm: Lm) -> None:
@@ -436,8 +440,7 @@ def test_edit_prompt_stages_a_prompt(lm: Lm) -> None:
     result = lm.invoke("edit-prompt", "--thread", "demo", stdin="")
 
     assert result.returncode == 0
-    staged_path = lm.get_staged_path("demo")
-    assert (staged_path / "prompt.md").read_text() == "staged question\n"
+    assert "staged question" in lm.invoke("status", "-t", "demo", stdin="").stdout
 
 
 def test_status_shows_the_staged_query(lm: Lm, tmp_path: Path) -> None:
@@ -471,10 +474,11 @@ def test_attach_adds_to_the_staged_query(lm: Lm, tmp_path: Path) -> None:
     lm.invoke("new", "demo", stdin="")
     lm.invoke("edit-prompt", "--thread", "demo", stdin="")
     result = lm.invoke("attach", "--thread", "demo", str(attachment_path), stdin="")
+    lm.invoke("commit", "--thread", "demo", stdin="")
 
     assert result.returncode == 0
-    staged_path = lm.get_staged_path("demo")
-    assert (staged_path / "attachments" / "notes.md").read_text() == "ATTACHED TEXT"
+    saved_path = lm.get_turn_path("demo", 0) / "attachments" / "notes.md"
+    assert saved_path.read_text() == "ATTACHED TEXT"
 
 
 def test_commit_turns_the_staged_query_into_a_turn(lm: Lm) -> None:
@@ -486,7 +490,7 @@ def test_commit_turns_the_staged_query_into_a_turn(lm: Lm) -> None:
     result = lm.invoke("commit", "--thread", "demo", stdin="")
 
     assert result.returncode == 0
-    assert not lm.get_staged_path("demo").exists()
+    assert "Nothing staged." in lm.invoke("status", "-t", "demo", stdin="").stdout
     turn_path = lm.get_turn_path("demo", 0)
     assert (turn_path / "prompt.md").read_text() == "staged question\n"
     assert (turn_path / "response.md").read_text() == "staged answer\n"
@@ -500,7 +504,7 @@ def test_clear_discards_the_staged_query(lm: Lm) -> None:
     result = lm.invoke("clear", "--thread", "demo", stdin="")
 
     assert result.returncode == 0
-    assert not lm.get_staged_path("demo").exists()
+    assert "Nothing staged." in lm.invoke("status", "-t", "demo", stdin="").stdout
     assert list(lm.get_thread_path("demo").glob("[0-9]*")) == []
 
 
@@ -659,9 +663,11 @@ def test_a_failed_inference_leaves_the_query_staged(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("run", "--thread", "demo", stdin="")
+    lm.set_claude_result_success("4")
+    result = lm.invoke("commit", "--thread", "demo", stdin="")
 
-    staged_path = lm.get_staged_path("demo")
-    assert (staged_path / "prompt.md").read_text() == "what is 2+2?\n"
+    assert result.returncode == 0
+    assert lm.get_claude_prompt() == "what is 2+2?"
 
 
 def test_run_reports_the_error_text_claude_gave(lm: Lm) -> None:
@@ -784,15 +790,17 @@ def test_committed_turn_files_are_read_only(lm: Lm) -> None:
 
 
 def test_a_turn_takes_the_whole_session_claude_wrote(lm: Lm) -> None:
-    lm.set_editor_prompt("a question\n")
     lm.set_claude_result_success("an answer")
 
     lm.invoke("new", "demo", stdin="")
+    lm.set_editor_prompt("a question\n")
+    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.set_editor_prompt("another question\n")
     lm.invoke("run", "--thread", "demo", stdin="")
 
     # Claude is still writing the session when it reports its result, so a turn
     # that moves the file without waiting takes half of it and leaves the rest
-    assert lm.get_session_prompts("demo") == ["a question"]
+    assert lm.get_claude_session_prompts() == ["a question", "another question"]
     assert list(lm.get_claude_projects_path().iterdir()) == []
 
 

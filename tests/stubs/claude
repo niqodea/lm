@@ -12,6 +12,7 @@ from typing import assert_never
 from protocol import (
     CLAUDE_ARGV_ENV,
     CLAUDE_SCRIPT_ENV,
+    CLAUDE_SESSION_ENV,
     CLAUDE_STDIN_ENV,
     ClaudeCompaction,
     ClaudeError,
@@ -41,6 +42,15 @@ def main() -> None:
         session_id = sys.argv[sys.argv.index("--resume") + 1]
     else:
         sys.exit("Expected --session-id or --resume in the claude call")
+
+    # Mirrors how claude names the directory it keeps a project's sessions in,
+    # so the turn only lands in the thread if lm predicted the same path
+    project_name = re.sub(r"[^a-zA-Z0-9]", "-", str(Path.cwd()))
+    project_path = Path.home() / ".claude" / "projects" / project_name
+    session_path = project_path / f"{session_id}.jsonl"
+
+    if "--resume" in sys.argv and not session_path.exists():
+        sys.exit(f"No conversation found with session ID: {session_id}")
 
     script = ClaudeScript.from_json(Path(os.environ[CLAUDE_SCRIPT_ENV]).read_text())
 
@@ -77,14 +87,13 @@ def main() -> None:
 
     time.sleep(SESSION_WRITE_DELAY_SECONDS)
 
-    # Mirrors how claude names the directory it keeps a project's sessions in,
-    # so the turn only lands in the thread if lm predicted the same path
-    project_name = re.sub(r"[^a-zA-Z0-9]", "-", str(Path.cwd()))
-    project_path = Path.home() / ".claude" / "projects" / project_name
     project_path.mkdir(parents=True, exist_ok=True)
-
-    with (project_path / f"{session_id}.jsonl").open("a") as session_file:
+    with session_path.open("a") as session_file:
         session_file.write(SessionTurn(prompt=prompt).to_line())
+
+    lines = session_path.read_text().splitlines()
+    prompts = [SessionTurn.from_line(line).prompt for line in lines]
+    Path(os.environ[CLAUDE_SESSION_ENV]).write_text(json.dumps(prompts))
 
     sys.exit(returncode)
 

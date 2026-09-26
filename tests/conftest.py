@@ -166,11 +166,9 @@ class Lm:
     def get_claude_stdin(self) -> str:
         return self._get_stub_file_path(protocol.CLAUDE_STDIN_ENV).read_text()
 
-    def get_session_prompts(self, thread: str) -> list[str]:
-        """Return the prompts recorded in the session claude has been resuming."""
-        session_path = self.get_thread_path(thread) / ".claude" / "session.jsonl"
-        lines = session_path.read_text().splitlines()
-        return [protocol.SessionTurn.from_line(line).prompt for line in lines]
+    def get_claude_session_prompts(self) -> list[str]:
+        """Return every prompt in the session of the last claude call, its own last."""
+        return self._get_json(protocol.CLAUDE_SESSION_ENV)
 
     def get_claude_projects_path(self) -> Path:
         """Where claude keeps the session files lm moves into its threads."""
@@ -178,9 +176,6 @@ class Lm:
 
     def get_thread_path(self, thread: str) -> Path:
         return self._root_path / "data" / "threads" / thread
-
-    def get_staged_path(self, thread: str) -> Path:
-        return self.get_thread_path(thread) / "STAGED"
 
     def get_turn_path(self, thread: str, turn_idx: int) -> Path:
         return sorted(self.get_thread_path(thread).glob("[0-9]*"))[turn_idx]
