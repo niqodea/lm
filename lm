@@ -514,7 +514,6 @@ def _cmd_chat(args: argparse.Namespace) -> None:
 
         _commit_staged(thread, response)
 
-        # Update mutable variables for next iteration
         history.append(
             _HistoryEntry(prompt=prompt, attachment_names=[], response=response)
         )
@@ -629,13 +628,16 @@ def _select_thread(threads_path: Path) -> str:
     if not threads:
         sys.exit("No threads found.")
 
-    summary_to_name = {
-        _format_thread_summary_line(thread): thread.name for thread in threads
-    }
+    # The summary shortens the name, so two threads can share one. The full name
+    # rides along in a first field fzf does not show.
+    lines = [
+        f"{thread.name}\t{_format_thread_summary_line(thread)}" for thread in threads
+    ]
 
     result = subprocess.run(
-        ["fzf", "--no-sort"],  # noqa: S607  (we expect path variable to be safe)
-        input="\n".join(summary_to_name),
+        # we expect path variable to be safe
+        ["fzf", "--no-sort", "--delimiter", "\t", "--with-nth", "2.."],  # noqa: S607
+        input="\n".join(lines),
         stdout=subprocess.PIPE,
         text=True,
         check=False,
@@ -643,7 +645,7 @@ def _select_thread(threads_path: Path) -> str:
     if result.returncode != 0:
         sys.exit("No thread selected.")
 
-    return summary_to_name[result.stdout.rstrip("\n")]
+    return result.stdout.split("\t", 1)[0]
 
 
 def _get_threads(threads_path: Path) -> list[_Thread]:
@@ -914,13 +916,13 @@ def _edit_prompt(path: Path, *, history: list[_HistoryEntry], draft: str | None)
 
     tty_path = Path(os.getenv(LM_TTY_ENV, "/dev/tty"))
 
+    # lm's own stdin and stdout may be pipes (`cat foo | lm run | less`), and the
+    # editor needs the terminal
     with tty_path.open("r") as tty_in, tty_path.open("w") as tty_out:
         process_result = subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
             [*editor_command, str(path)],
             check=False,
-            # For piping stdin
             stdin=tty_in,
-            # For piping stdout
             stdout=tty_out,
             stderr=tty_out,
         )
@@ -1007,17 +1009,18 @@ def _execute_turn(
             "--system-prompt",
             thread.system_prompt_path.read_text(),
             *claude_session_args,
-            # Simplify behavior
+            # Non-interactive: one turn, then exit
             "--print",
-            # Keeps user config out; unlike --bare, it leaves OAuth alone
+            # Keeps user config out; unlike --bare, it leaves OAuth alone, where
+            # --bare would bill the API instead of the subscription
             "--safe-mode",
-            # Restrict tool context
+            # Only the thread's capabilities, so no tool can reach the disk
             "--tools",
             claude_tools,
             # Pre-approve to avoid permission errors in print mode
             "--allowed-tools",
             claude_tools,
-            # To stream response text
+            # Without it, text arrives only once each message is whole
             "--include-partial-messages",
             "--output-format",
             "stream-json",
@@ -1031,9 +1034,8 @@ def _execute_turn(
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
-            # --bare / CLAUDE_CODE_SIMPLE disables OAuth and routes billing to API
-            # Still, as long as we set CWD to a bare directory, no CLAUDE.md will be
-            # picked up.
+            # Nothing from the directory lm was run reaches, and the attachments
+            # are linked in here for @ references to work
             cwd=thread.scratch_cwd_path,
         ) as process:
             if process.stdin is None:

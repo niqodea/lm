@@ -33,12 +33,13 @@ For agentic work on a codebase (tools, edits, permissions), keep using `claude`.
   00/
     prompt.md
     response.md
+    stdin
     attachments/
   01/
     ...
 ```
 
-Every file is plain markdown. Nothing is hidden, nothing is locked in.
+Prompts and responses are plain markdown, next to whatever you piped in or attached. Nothing is locked in.
 
 ## Installation
 

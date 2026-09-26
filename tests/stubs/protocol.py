@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import assert_never
 
 # Written by the harness before the run, read by the stub during it
 EDITOR_PROMPTS_ENV = "LM_TEST_EDITOR_PROMPTS"
@@ -97,6 +98,8 @@ class ClaudeScript:
                     )
                 case ClaudeCompaction(pre_tokens=pre_tokens):
                     events.append({"kind": "compaction", "pre_tokens": pre_tokens})
+                case _:
+                    assert_never(event)
         ending: dict[str, object] | None
         match self.ending:
             case ClaudeSuccess():
@@ -105,6 +108,8 @@ class ClaudeScript:
                 ending = {"kind": "error", "subtype": subtype, "errors": errors}
             case None:
                 ending = None
+            case _:
+                assert_never(self.ending)
         return json.dumps({"events": events, "ending": ending})
 
     @staticmethod
@@ -119,6 +124,8 @@ class ClaudeScript:
                     events.append(ClaudeToolCall(name=name, arguments=arguments))
                 case {"kind": "compaction", "pre_tokens": pre_tokens}:
                     events.append(ClaudeCompaction(pre_tokens=pre_tokens))
+                case _:
+                    raise ValueError(f"Unknown event in claude script: {event}")
         ending: ClaudeEnding
         match script["ending"]:
             case {"kind": "success"}:
@@ -127,6 +134,8 @@ class ClaudeScript:
                 ending = ClaudeError(subtype=subtype, errors=errors)
             case None:
                 ending = None
+            case _:
+                raise ValueError(f"Unknown ending in claude script: {script['ending']}")
         return ClaudeScript(events=events, ending=ending)
 
 

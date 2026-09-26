@@ -747,6 +747,21 @@ def test_an_unknown_preset_is_rejected(lm: Lm) -> None:
     assert "Preset not found" in result.stderr
 
 
+def test_select_tells_apart_names_that_shorten_the_same(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_result_success("4")
+
+    # Both names shorten to "project...notes" in the list fzf shows
+    lm.invoke("new", "project-alpha-notes", stdin="")
+    lm.invoke("new", "project-beta-notes", stdin="")
+    lm.set_selected_thread("project-alpha-notes")
+    result = lm.invoke("run", "--select", stdin="")
+
+    assert result.returncode == 0
+    prompt_path = lm.get_turn_path("project-alpha-notes", 0) / "prompt.md"
+    assert prompt_path.read_text() == "what is 2+2?\n"
+
+
 def test_select_refuses_when_nothing_is_picked(lm: Lm) -> None:
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("run", "--select", stdin="")
@@ -817,6 +832,7 @@ def test_vim_is_told_to_jump_to_the_prompt(lm: Lm) -> None:
 
 
 def test_nano_gets_the_prompt_above_the_history(lm: Lm) -> None:
+    lm.set_editor("nano")
     lm.set_preset("draft", "MY DRAFT")
     lm.set_claude_result_success("first answer")
 
