@@ -311,7 +311,7 @@ def _execute_run(args: argparse.Namespace, env: _Environment) -> None:
     except _EmptyPromptError:
         sys.exit("Prompt is empty, exiting.")
 
-    staged = _Exchanges.Query(thread.staged_path)
+    staged = _Query(thread.staged_path)
     staged.path.mkdir()
     _write_prompt(staged, prompt)
 
@@ -394,10 +394,10 @@ def _execute_rm(args: argparse.Namespace, env: _Environment) -> None:
     thread = _get_thread(args.thread_choice, threads_path)
 
     for turn_idx in range(_get_turns_count(thread)):
-        _remove_turn(_Exchanges.Turn(thread.get_turn_path(turn_idx)))
+        _remove_turn(_Turn(thread.get_turn_path(turn_idx)))
 
     if thread.staged_path.exists():
-        _remove_query(_Exchanges.Query(thread.staged_path))
+        _remove_query(_Query(thread.staged_path))
 
     thread.editmsg_path.unlink(missing_ok=True)
 
@@ -420,7 +420,7 @@ def _execute_edit_prompt(args: argparse.Namespace, env: _Environment) -> None:
     thread = _get_thread(args.thread_choice, threads_path)
     preset_name: str | None = args.preset
 
-    staged = _Exchanges.Query(thread.staged_path)
+    staged = _Query(thread.staged_path)
     staged.path.mkdir(exist_ok=True)
 
     staged_prompt_path = staged.prompt_path
@@ -457,7 +457,7 @@ def _execute_attach(args: argparse.Namespace, env: _Environment) -> None:
     thread = _get_thread(args.thread_choice, threads_path)
     attachments = [_get_attachment(a) for a in args.attachments]
 
-    staged = _Exchanges.Query(thread.staged_path)
+    staged = _Query(thread.staged_path)
     staged.path.mkdir(exist_ok=True)
 
     attachments_path = staged.attachments_path
@@ -472,7 +472,7 @@ def _execute_commit(args: argparse.Namespace, env: _Environment) -> None:
 
     thread = _get_thread(args.thread_choice, threads_path)
 
-    staged = _Exchanges.Query(thread.staged_path)
+    staged = _Query(thread.staged_path)
     if not staged.path.exists():
         sys.exit("No staged query found.")
 
@@ -506,7 +506,7 @@ def _execute_clear(args: argparse.Namespace, env: _Environment) -> None:
 
     thread = _get_thread(args.thread_choice, threads_path)
 
-    staged = _Exchanges.Query(thread.staged_path)
+    staged = _Query(thread.staged_path)
 
     if not staged.path.exists():
         sys.exit("No staged query found.")
@@ -566,7 +566,7 @@ def _execute_chat(args: argparse.Namespace, env: _Environment) -> None:
     history = _build_history(thread)
 
     while True:
-        staged = _Exchanges.Query(thread.staged_path)
+        staged = _Query(thread.staged_path)
         staged.path.mkdir()
         _write_prompt(staged, prompt)
 
@@ -808,47 +808,46 @@ def _assert_no_staged_query(thread: _Thread) -> None:
 # --- exchanges
 
 
-class _Exchanges:
-    """The files of one prompt, before and after it is sent."""
+@dataclass(frozen=True)
+class _Exchange:
+    """The files of one prompt, which a query and the turn it becomes share."""
 
-    @dataclass(frozen=True)
-    class _Base:
-        """What a query and a turn hold alike."""
+    path: Path
 
-        path: Path
+    @property
+    def prompt_path(self) -> Path:
+        return self.path / "prompt.md"
 
-        @property
-        def prompt_path(self) -> Path:
-            return self.path / "prompt.md"
+    @property
+    def stdin_path(self) -> Path:
+        return self.path / "stdin"
 
-        @property
-        def stdin_path(self) -> Path:
-            return self.path / "stdin"
-
-        @property
-        def attachments_path(self) -> Path:
-            return self.path / "attachments"
-
-    @dataclass(frozen=True)
-    class Query(_Base):
-        """Staged, not sent yet."""
-
-    @dataclass(frozen=True)
-    class Turn(_Base):
-        """Sent, with the response saved beside it."""
-
-        @property
-        def response_path(self) -> Path:
-            return self.path / "response.md"
+    @property
+    def attachments_path(self) -> Path:
+        return self.path / "attachments"
 
 
-def _write_prompt(query: _Exchanges.Query, prompt: str) -> None:
+@dataclass(frozen=True)
+class _Query(_Exchange):
+    """Staged, not sent yet."""
+
+
+@dataclass(frozen=True)
+class _Turn(_Exchange):
+    """Sent, with the response saved beside it."""
+
+    @property
+    def response_path(self) -> Path:
+        return self.path / "response.md"
+
+
+def _write_prompt(query: _Query, prompt: str) -> None:
     # new line at the end to be in line with response and stick to best practices
     query.prompt_path.write_text(f"{prompt}\n")
 
 
 def _commit_staged(thread: _Thread, response: str) -> None:
-    turn = _Exchanges.Turn(thread.get_turn_path(_get_turns_count(thread)))
+    turn = _Turn(thread.get_turn_path(_get_turns_count(thread)))
 
     thread.staged_path.rename(turn.path)
 
@@ -859,14 +858,14 @@ def _commit_staged(thread: _Thread, response: str) -> None:
     _write_read_only(turn.response_path, response)
 
 
-def _remove_query(query: _Exchanges.Query) -> None:
+def _remove_query(query: _Query) -> None:
     query.prompt_path.unlink(missing_ok=True)
     query.stdin_path.unlink(missing_ok=True)
     _remove_attachments(query)
     query.path.rmdir()
 
 
-def _remove_turn(turn: _Exchanges.Turn) -> None:
+def _remove_turn(turn: _Turn) -> None:
     turn.prompt_path.unlink()
     turn.response_path.unlink()
 
@@ -876,7 +875,7 @@ def _remove_turn(turn: _Exchanges.Turn) -> None:
     turn.path.rmdir()
 
 
-def _remove_attachments(exchange: _Exchanges._Base) -> None:
+def _remove_attachments(exchange: _Exchange) -> None:
     path = exchange.attachments_path
     if not path.exists():
         return
@@ -1071,7 +1070,7 @@ def _format_history(history: list[_HistoryEntry]) -> list[str]:
 def _build_history(thread: _Thread) -> list[_HistoryEntry]:
     entries: list[_HistoryEntry] = []
     for idx in range(_get_turns_count(thread)):
-        turn = _Exchanges.Turn(thread.get_turn_path(idx))
+        turn = _Turn(thread.get_turn_path(idx))
         attachments_path = turn.attachments_path
         if attachments_path.exists():
             attachment_names = tuple(p.name for p in attachments_path.iterdir())
@@ -1126,8 +1125,10 @@ def _handle_turn(
             *claude_session_args,
             # Non-interactive: one turn, then exit
             "--print",
-            # Keeps user config out; unlike --bare, it leaves OAuth alone, where
-            # --bare would bill the API instead of the subscription
+            # Keeps user config out but still logs in with the subscription;
+            # --bare never reads OAuth credentials and needs an API key instead
+            # Ref: https://code.claude.com/docs/en/cli-reference#cli-flags
+            # Ref: https://code.claude.com/docs/en/headless#start-faster-with-bare-mode
             "--safe-mode",
             # Only the thread's capabilities, so no tool can reach the disk
             "--tools",
@@ -1143,7 +1144,9 @@ def _handle_turn(
         ]
 
         # Claude keeps writing the session file after the result it ends on, and
-        # leaving this block waits for it to finish before the file is moved
+        # leaving this block waits for it to finish before the file is moved.
+        # Observed, not documented: the docs only say transcripts are saved
+        # continuously.
         with subprocess.Popen(  # noqa: S603  (command is not user-provided)
             command,
             stdin=subprocess.PIPE,
@@ -1179,9 +1182,9 @@ def _read_response(
     for line in process.stdout:
         event = json.loads(line)
 
-        # The result event ends the run, and says whether the turn succeeded.
-        # is_error is in the CLI's own result schema, not the published docs:
-        # false on the success variant, true on every error one.
+        # The result event ends the run, and its is_error says whether the turn
+        # succeeded.
+        # Ref: https://code.claude.com/docs/en/agent-sdk/typescript#sdkresultmessage
         if event["type"] == "result":
             if event.get("is_error") is True:
                 sys.exit(
@@ -1234,7 +1237,6 @@ def _read_response(
 
 
 def _get_failure_detail(*, errors: list[str], error_subtype: str | None) -> str:
-    # `errors` is in the CLI result schema, though not in the published docs
     if len(errors) > 0:
         return "; ".join(errors)
     if error_subtype is None:
@@ -1336,7 +1338,7 @@ class _ClaudeContext:
         scratch_cwd_path: Path,
         attachments_path: Path | None,
     ) -> _ClaudeContext:
-        # Ref: https://code.claude.com/docs/en/agent-sdk/sessions
+        # Ref: https://code.claude.com/docs/en/sessions#where-transcripts-are-stored
         escaped_cwd = re.sub(r"[^a-zA-Z0-9]", "-", str(scratch_cwd_path.resolve()))
         project_path = projects_path / escaped_cwd
         id_ = str(uuid.uuid4())
@@ -1429,7 +1431,7 @@ def _format_thread_summary_line(thread: _Thread) -> str:
     if turns_count == 0:
         return header
 
-    last_turn = _Exchanges.Turn(thread.get_turn_path(turns_count - 1))
+    last_turn = _Turn(thread.get_turn_path(turns_count - 1))
     prompt = _summarize_text(
         last_turn.prompt_path.read_text(), max_length=LS_PROMPT_LENGTH
     )
@@ -1457,7 +1459,7 @@ def _format_status(thread: _Thread) -> str:
         "",
     ]
 
-    staged = _Exchanges.Query(thread.staged_path)
+    staged = _Query(thread.staged_path)
     if not staged.path.exists():
         lines.append("Nothing staged.")
         return "\n".join(lines) + "\n"
@@ -1474,7 +1476,7 @@ def _format_status(thread: _Thread) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _format_staged(staged: _Exchanges.Query) -> list[str]:
+def _format_staged(staged: _Query) -> list[str]:
     lines: list[str] = []
 
     prompt_path = staged.prompt_path
