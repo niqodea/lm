@@ -223,15 +223,58 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    env = _Environment.create()
+
     try:
-        args.func(args)
+        args.func(args, env)
     except KeyboardInterrupt:
         sys.exit(INTERRUPT_EXIT_CODE)
 
 
-def _execute_init(_: argparse.Namespace) -> None:
-    config_path = _get_config_path(missing_ok=True)
-    data_path = _get_data_path(missing_ok=True)
+@dataclass(frozen=True)
+class _Environment:
+    """What lm reads from outside the process."""
+
+    config_path: Path
+    data_path: Path
+    claude_projects_path: Path
+    editor: str
+    tty_path: Path
+    pager: str
+    started_at: datetime.datetime
+
+    @staticmethod
+    def create() -> _Environment:
+        if (xdg_config_home := os.environ.get("XDG_CONFIG_HOME")) is not None:
+            config_home_path = Path(xdg_config_home)
+        else:
+            config_home_path = Path.home() / ".config"
+
+        if (lm_data_dir := os.environ.get(LM_DATA_DIR_ENV)) is not None:
+            data_path = Path(lm_data_dir)
+        else:
+            if (xdg_data_home := os.environ.get("XDG_DATA_HOME")) is not None:
+                data_home_path = Path(xdg_data_home)
+            else:
+                data_home_path = Path.home() / ".local/share"
+            data_path = data_home_path / "lm"
+
+        return _Environment(
+            config_path=config_home_path / "lm",
+            data_path=data_path,
+            claude_projects_path=Path.home() / ".claude" / "projects",
+            editor=os.getenv("EDITOR", "vim"),
+            # The tests have no terminal to hand the editor, so they point this at
+            # a file
+            tty_path=Path(os.getenv(LM_TTY_ENV, "/dev/tty")),
+            pager=os.getenv("PAGER", "less"),
+            started_at=datetime.datetime.now().astimezone(),
+        )
+
+
+def _execute_init(_: argparse.Namespace, env: _Environment) -> None:
+    config_path = env.config_path
+    data_path = env.data_path
 
     if not config_path.exists():
         config_path.mkdir()
@@ -246,10 +289,10 @@ def _execute_init(_: argparse.Namespace) -> None:
         (data_path / THREADS_PATHNAME).mkdir()
 
 
-def _execute_run(args: argparse.Namespace) -> None:
-    config_path = _get_config_path(missing_ok=False)
-    data_path = _get_data_path(missing_ok=False)
-    threads_path = data_path / THREADS_PATHNAME
+def _execute_run(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    config_path = env.config_path
+    threads_path = env.data_path / THREADS_PATHNAME
 
     preset_name: str | None = args.preset
     draft = None if preset_name is None else _get_preset(preset_name, config_path)
@@ -257,7 +300,13 @@ def _execute_run(args: argparse.Namespace) -> None:
 
     try:
         thread, prompt = _get_or_create_thread_with_prompt(
-            args.thread_choice, threads_path, config_path=config_path, draft=draft
+            args.thread_choice,
+            threads_path,
+            config_path=config_path,
+            draft=draft,
+            editor=env.editor,
+            tty_path=env.tty_path,
+            started_at=env.started_at,
         )
     except _EmptyPromptError:
         sys.exit("Prompt is empty, exiting.")
@@ -285,15 +334,16 @@ def _execute_run(args: argparse.Namespace) -> None:
         piped_stdin=piped_stdin,
         attachments_path=attachments_path,
         char_delay=_get_char_delay_from_settings(config_path),
+        claude_projects_path=env.claude_projects_path,
     )
 
     _commit_staged(thread, response)
 
 
-def _execute_new(args: argparse.Namespace) -> None:
-    config_path = _get_config_path(missing_ok=False)
-    data_path = _get_data_path(missing_ok=False)
-    threads_path = data_path / THREADS_PATHNAME
+def _execute_new(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    config_path = env.config_path
+    threads_path = env.data_path / THREADS_PATHNAME
 
     name: str = args.name
     capabilities: list[str] = args.capabilities
@@ -322,9 +372,9 @@ def _execute_new(args: argparse.Namespace) -> None:
     )
 
 
-def _execute_rename(args: argparse.Namespace) -> None:
-    data_path = _get_data_path(missing_ok=False)
-    threads_path = data_path / THREADS_PATHNAME
+def _execute_rename(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    threads_path = env.data_path / THREADS_PATHNAME
 
     src = _get_thread(args.thread_choice, threads_path)
 
@@ -337,9 +387,9 @@ def _execute_rename(args: argparse.Namespace) -> None:
     src.path.rename(dst_path)
 
 
-def _execute_rm(args: argparse.Namespace) -> None:
-    data_path = _get_data_path(missing_ok=False)
-    threads_path = data_path / THREADS_PATHNAME
+def _execute_rm(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    threads_path = env.data_path / THREADS_PATHNAME
 
     thread = _get_thread(args.thread_choice, threads_path)
 
@@ -362,10 +412,10 @@ def _execute_rm(args: argparse.Namespace) -> None:
     thread.path.rmdir()
 
 
-def _execute_edit_prompt(args: argparse.Namespace) -> None:
-    config_path = _get_config_path(missing_ok=False)
-    data_path = _get_data_path(missing_ok=False)
-    threads_path = data_path / THREADS_PATHNAME
+def _execute_edit_prompt(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    config_path = env.config_path
+    threads_path = env.data_path / THREADS_PATHNAME
 
     thread = _get_thread(args.thread_choice, threads_path)
     preset_name: str | None = args.preset
@@ -387,16 +437,22 @@ def _execute_edit_prompt(args: argparse.Namespace) -> None:
 
     history = _build_history(thread)
     try:
-        prompt = _edit_prompt(thread.editmsg_path, history=history, draft=draft)
+        prompt = _edit_prompt(
+            thread.editmsg_path,
+            history=history,
+            draft=draft,
+            editor=env.editor,
+            tty_path=env.tty_path,
+        )
     except _EmptyPromptError:
         sys.exit("Prompt is empty, exiting.")
 
     _write_prompt(staged, prompt)
 
 
-def _execute_attach(args: argparse.Namespace) -> None:
-    data_path = _get_data_path(missing_ok=False)
-    threads_path = data_path / THREADS_PATHNAME
+def _execute_attach(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    threads_path = env.data_path / THREADS_PATHNAME
 
     thread = _get_thread(args.thread_choice, threads_path)
     attachments = [_get_attachment(a) for a in args.attachments]
@@ -409,10 +465,10 @@ def _execute_attach(args: argparse.Namespace) -> None:
     _write_attachments(attachments, attachments_path)
 
 
-def _execute_commit(args: argparse.Namespace) -> None:
-    config_path = _get_config_path(missing_ok=False)
-    data_path = _get_data_path(missing_ok=False)
-    threads_path = data_path / THREADS_PATHNAME
+def _execute_commit(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    config_path = env.config_path
+    threads_path = env.data_path / THREADS_PATHNAME
 
     thread = _get_thread(args.thread_choice, threads_path)
 
@@ -438,14 +494,15 @@ def _execute_commit(args: argparse.Namespace) -> None:
         piped_stdin=piped_stdin,
         attachments_path=attachments_path if attachments_path.exists() else None,
         char_delay=_get_char_delay_from_settings(config_path),
+        claude_projects_path=env.claude_projects_path,
     )
 
     _commit_staged(thread, response)
 
 
-def _execute_clear(args: argparse.Namespace) -> None:
-    data_path = _get_data_path(missing_ok=False)
-    threads_path = data_path / THREADS_PATHNAME
+def _execute_clear(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    threads_path = env.data_path / THREADS_PATHNAME
 
     thread = _get_thread(args.thread_choice, threads_path)
 
@@ -457,43 +514,51 @@ def _execute_clear(args: argparse.Namespace) -> None:
     _remove_query(staged)
 
 
-def _execute_ls(_: argparse.Namespace) -> None:
-    data_path = _get_data_path(missing_ok=False)
-    threads_path = data_path / THREADS_PATHNAME
+def _execute_ls(_: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    threads_path = env.data_path / THREADS_PATHNAME
 
     threads = _get_threads(threads_path)
-    _write_paged("".join(f"{_format_thread_summary_line(t)}\n" for t in threads))
+    _write_paged(
+        "".join(f"{_format_thread_summary_line(t)}\n" for t in threads), pager=env.pager
+    )
 
 
-def _execute_show(args: argparse.Namespace) -> None:
-    data_path = _get_data_path(missing_ok=False)
-    threads_path = data_path / THREADS_PATHNAME
+def _execute_show(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    threads_path = env.data_path / THREADS_PATHNAME
 
     thread = _get_thread(args.thread_choice, threads_path)
 
     history = _build_history(thread)
     history_components = _format_history(history)
 
-    _write_paged("\n\n".join(history_components))
+    _write_paged("\n\n".join(history_components), pager=env.pager)
 
 
-def _execute_status(args: argparse.Namespace) -> None:
-    data_path = _get_data_path(missing_ok=False)
-    threads_path = data_path / THREADS_PATHNAME
+def _execute_status(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    threads_path = env.data_path / THREADS_PATHNAME
 
     thread = _get_thread(args.thread_choice, threads_path)
 
-    _write_paged(_format_status(thread))
+    _write_paged(_format_status(thread), pager=env.pager)
 
 
-def _execute_chat(args: argparse.Namespace) -> None:
-    config_path = _get_config_path(missing_ok=False)
-    data_path = _get_data_path(missing_ok=False)
-    threads_path = data_path / THREADS_PATHNAME
+def _execute_chat(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    config_path = env.config_path
+    threads_path = env.data_path / THREADS_PATHNAME
 
     try:
         thread, prompt = _get_or_create_thread_with_prompt(
-            args.thread_choice, threads_path, config_path=config_path, draft=None
+            args.thread_choice,
+            threads_path,
+            config_path=config_path,
+            draft=None,
+            editor=env.editor,
+            tty_path=env.tty_path,
+            started_at=env.started_at,
         )
     except _EmptyPromptError:
         return
@@ -511,6 +576,7 @@ def _execute_chat(args: argparse.Namespace) -> None:
             piped_stdin="",
             attachments_path=None,
             char_delay=_get_char_delay_from_settings(config_path),
+            claude_projects_path=env.claude_projects_path,
         )
 
         _commit_staged(thread, response)
@@ -519,7 +585,13 @@ def _execute_chat(args: argparse.Namespace) -> None:
             _HistoryEntry(prompt=prompt, attachment_names=(), response=response)
         )
         try:
-            prompt = _edit_prompt(thread.editmsg_path, history=history, draft=None)
+            prompt = _edit_prompt(
+                thread.editmsg_path,
+                history=history,
+                draft=None,
+                editor=env.editor,
+                tty_path=env.tty_path,
+            )
         except _EmptyPromptError:
             return
 
@@ -861,20 +933,36 @@ def _get_or_create_thread_with_prompt(
     *,
     config_path: Path,
     draft: str | None,
+    editor: str,
+    tty_path: Path,
+    started_at: datetime.datetime,
 ) -> tuple[_Thread, str]:
     if choice is not None:
         thread = _get_thread(choice, threads_path)
         _assert_no_staged_query(thread)
         history = _build_history(thread)
-        return thread, _edit_prompt(thread.editmsg_path, history=history, draft=draft)
+        prompt = _edit_prompt(
+            thread.editmsg_path,
+            history=history,
+            draft=draft,
+            editor=editor,
+            tty_path=tty_path,
+        )
+        return thread, prompt
 
-    thread_timestamp = datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    thread_timestamp = started_at.strftime("%Y%m%d-%H%M%S")
     editmsg_pathname = TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE.format(
         timestamp=thread_timestamp
     )
     # The thread is written only once there is a prompt for it, so abandoning
     # the editor leaves no empty thread behind
-    prompt = _edit_prompt(threads_path / editmsg_pathname, history=[], draft=draft)
+    prompt = _edit_prompt(
+        threads_path / editmsg_pathname,
+        history=[],
+        draft=draft,
+        editor=editor,
+        tty_path=tty_path,
+    )
 
     sys.stderr.write(f"Creating new thread: {thread_timestamp}\n")
     thread = _create_thread(
@@ -891,8 +979,15 @@ class _EmptyPromptError(Exception):
     """The editor came back with nothing."""
 
 
-def _edit_prompt(path: Path, *, history: list[_HistoryEntry], draft: str | None) -> str:
-    editor_command = shlex.split(os.getenv("EDITOR", "vim"))
+def _edit_prompt(
+    path: Path,
+    *,
+    history: list[_HistoryEntry],
+    draft: str | None,
+    editor: str,
+    tty_path: Path,
+) -> str:
+    editor_command = shlex.split(editor)
     if not editor_command:
         sys.exit("Editor is empty.")
 
@@ -933,8 +1028,6 @@ def _edit_prompt(path: Path, *, history: list[_HistoryEntry], draft: str | None)
         components.reverse()
 
     path.write_text("\n\n".join(components))
-
-    tty_path = Path(os.getenv(LM_TTY_ENV, "/dev/tty"))
 
     # lm's own stdin and stdout may be pipes (`cat foo | lm run | less`), and the
     # editor needs the terminal
@@ -1004,11 +1097,13 @@ def _handle_turn(
     piped_stdin: str,
     attachments_path: Path | None,
     char_delay: float,
+    claude_projects_path: Path,
 ) -> str:
     prompt_summary = _summarize_text(prompt, max_length=PROMPT_SUMMARY_MAX_LENGTH)
     claude_tools = thread.tools_path.read_text()
 
     with _ClaudeContext.create(
+        projects_path=claude_projects_path,
         thread_session_path=thread.session_path,
         scratch_cwd_path=thread.scratch_cwd_path,
         attachments_path=attachments_path,
@@ -1236,12 +1331,12 @@ class _ClaudeContext:
     @staticmethod
     def create(
         *,
+        projects_path: Path,
         thread_session_path: Path,
         scratch_cwd_path: Path,
         attachments_path: Path | None,
     ) -> _ClaudeContext:
         # Ref: https://code.claude.com/docs/en/agent-sdk/sessions
-        projects_path = Path.home() / ".claude/projects"
         escaped_cwd = re.sub(r"[^a-zA-Z0-9]", "-", str(scratch_cwd_path.resolve()))
         project_path = projects_path / escaped_cwd
         id_ = str(uuid.uuid4())
@@ -1308,19 +1403,18 @@ class _ClaudeContext:
 # --- output
 
 
-def _write_paged(content: str) -> None:
+def _write_paged(content: str, *, pager: str) -> None:
     if not sys.stdout.isatty():
         sys.stdout.write(content)
         return
 
-    pager = os.getenv("PAGER", "less")
-    env = os.environ.copy()
-    env.setdefault("LESS", "-FRX")
+    pager_env = os.environ.copy()
+    pager_env.setdefault("LESS", "-FRX")
     with subprocess.Popen(  # noqa: S603  (running the user pager expected to be safe)
         pager,
         stdin=subprocess.PIPE,
         text=True,
-        env=env,
+        env=pager_env,
     ) as pager_proc:
         if pager_proc.stdin is None:
             sys.exit("Unexpected error: Pager standard input not captured")
@@ -1423,34 +1517,17 @@ def _compress_text(value: str, max_length: int) -> str:
 # --- config and data
 
 
-def _get_config_path(*, missing_ok: bool) -> Path:
-    if (xdg_config_home := os.environ.get("XDG_CONFIG_HOME")) is not None:
-        config_home_path = Path(xdg_config_home)
-    else:
-        config_home_path = Path.home() / ".config"
-
-    path = config_home_path / "lm"
-
-    if not missing_ok and not path.exists():
-        sys.exit(f"Config directory not found: {path}\nRun `lm init` to initialize it.")
-
-    return path
-
-
-def _get_data_path(*, missing_ok: bool) -> Path:
-    if (lm_data_dir := os.environ.get(LM_DATA_DIR_ENV)) is not None:
-        path = Path(lm_data_dir)
-    else:
-        if (xdg_data_home := os.environ.get("XDG_DATA_HOME")) is not None:
-            data_home_path = Path(xdg_data_home)
-        else:
-            data_home_path = Path.home() / ".local/share"
-        path = data_home_path / "lm"
-
-    if not missing_ok and not path.exists():
-        sys.exit(f"Data directory not found: {path}\nRun `lm init` to initialize it.")
-
-    return path
+def _assert_initialized(env: _Environment) -> None:
+    if not env.config_path.exists():
+        sys.exit(
+            f"Config directory not found: {env.config_path}\n"
+            "Run `lm init` to initialize it."
+        )
+    if not env.data_path.exists():
+        sys.exit(
+            f"Data directory not found: {env.data_path}\n"
+            "Run `lm init` to initialize it."
+        )
 
 
 def _get_preset(name: str, config_path: Path) -> str:
