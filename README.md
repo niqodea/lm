@@ -114,7 +114,7 @@ lm ls                 # list threads with last prompt/response summary
 lm new mytopic        # create a named thread
 lm rename -t old new  # rename a thread
 lm rm -t mytopic      # delete a thread
-lm undo -t mytopic    # remove the last turn of a thread
+lm undo -t mytopic    # turn the last turn back into the staged query
 lm show -t mytopic    # print the turns of a thread
 lm status -t mytopic  # show a thread's settings and staged query
 ```

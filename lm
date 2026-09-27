@@ -167,7 +167,7 @@ def main() -> None:
 
     undo_parser = subparsers.add_parser(
         "undo",
-        help="Remove the last turn of a thread.",
+        help="Turn the last turn of a thread back into the staged query.",
     )
     undo_parser.set_defaults(func=_execute_undo)
     _add_thread_args(undo_parser, required=True)
@@ -429,6 +429,7 @@ def _execute_undo(args: argparse.Namespace, env: _Environment) -> None:
     turns_count = _get_turns_count(thread)
     if turns_count == 0:
         sys.exit("No turns to undo.")
+    _assert_no_staged_query(thread)
 
     turn_lines_counts = [
         int(line) for line in thread.session_lines_path.read_text().splitlines()
@@ -445,7 +446,14 @@ def _execute_undo(args: argparse.Namespace, env: _Environment) -> None:
         "".join(f"{count}\n" for count in kept_turn_lines_counts)
     )
 
-    _remove_turn(_Turn(thread.get_turn_path(turns_count - 1)))
+    turn = _Turn(thread.get_turn_path(turns_count - 1))
+    turn.response_path.unlink()
+    turn.path.rename(thread.staged_path)
+
+    # Committing made the files read-only, and a staged query can be edited
+    for path in thread.staged_path.rglob("*"):
+        if path.is_file():
+            path.chmod(0o644)
 
 
 def _execute_edit_prompt(args: argparse.Namespace, env: _Environment) -> None:

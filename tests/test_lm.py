@@ -153,7 +153,7 @@ def test_rm_deletes_a_thread(lm: Lm) -> None:
     assert not lm.get_thread_path("demo").exists()
 
 
-def test_undo_removes_the_last_turn(lm: Lm) -> None:
+def test_undo_stages_the_last_turn_again(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
@@ -167,9 +167,10 @@ def test_undo_removes_the_last_turn(lm: Lm) -> None:
     turn_paths = list(lm.get_thread_path("demo").glob("[0-9]*"))
     assert len(turn_paths) == 1
     assert (turn_paths[0] / "prompt.md").read_text() == "what is 2+2?\n"
+    assert "and 3+3?" in lm.invoke("status", "-t", "demo", stdin="").stdout
 
 
-def test_a_turn_after_undo_resumes_without_the_undone_one(lm: Lm) -> None:
+def test_a_commit_after_undo_resends_the_undone_prompt(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
@@ -178,24 +179,55 @@ def test_a_turn_after_undo_resumes_without_the_undone_one(lm: Lm) -> None:
     lm.set_editor_prompt("and 3+3?\n")
     lm.invoke("run", "--thread", "demo", stdin="")
     lm.invoke("undo", "--thread", "demo", stdin="")
-    lm.set_editor_prompt("and 4+4?\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.set_claude_result_success("6")
+    result = lm.invoke("commit", "--thread", "demo", stdin="")
 
-    assert lm.get_claude_session_prompts() == ["what is 2+2?", "and 4+4?"]
+    assert result.returncode == 0
+    assert lm.get_claude_prompt() == "and 3+3?"
+    assert lm.get_claude_session_prompts() == ["what is 2+2?", "and 3+3?"]
+    assert (lm.get_turn_path("demo", 1) / "response.md").read_text() == "6\n"
 
 
-def test_a_turn_after_undoing_every_turn_starts_a_new_session(lm: Lm) -> None:
+def test_an_undone_prompt_can_be_edited_before_it_is_resent(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("what is 2+2?\n")
     lm.invoke("run", "--thread", "demo", stdin="")
     lm.invoke("undo", "--thread", "demo", stdin="")
-    lm.set_editor_prompt("and 3+3?\n")
+    lm.set_editor_prompt("what is 3+3?\n")
+    lm.invoke("edit-prompt", "--thread", "demo", stdin="")
+    lm.invoke("commit", "--thread", "demo", stdin="")
+
+    # The editor stub types below the draft it was handed
+    assert lm.get_claude_prompt() == "what is 2+2?\n\nwhat is 3+3?"
+
+
+def test_a_commit_after_undoing_every_turn_starts_a_new_session(lm: Lm) -> None:
+    lm.set_claude_result_success("4")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.set_editor_prompt("what is 2+2?\n")
     lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("undo", "--thread", "demo", stdin="")
+    lm.invoke("commit", "--thread", "demo", stdin="")
 
     assert "--session-id" in lm.get_claude_argv()
-    assert lm.get_claude_session_prompts() == ["and 3+3?"]
+    assert lm.get_claude_session_prompts() == ["what is 2+2?"]
+
+
+def test_undo_refuses_with_a_staged_query(lm: Lm) -> None:
+    lm.set_editor_prompts("what is 2+2?\n", "and 3+3?\n")
+    lm.set_claude_result_success("4")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("edit-prompt", "--thread", "demo", stdin="")
+    result = lm.invoke("undo", "--thread", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "Staged query already exists" in result.stderr
+    assert len(list(lm.get_thread_path("demo").glob("[0-9]*"))) == 1
 
 
 def test_undo_refuses_a_thread_without_turns(lm: Lm) -> None:
