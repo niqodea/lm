@@ -153,6 +153,59 @@ def test_rm_deletes_a_thread(lm: Lm) -> None:
     assert not lm.get_thread_path("demo").exists()
 
 
+def test_undo_removes_the_last_turn(lm: Lm) -> None:
+    lm.set_claude_result_success("4")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.set_editor_prompt("and 3+3?\n")
+    lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("undo", "--thread", "demo", stdin="")
+
+    assert result.returncode == 0
+    turn_paths = list(lm.get_thread_path("demo").glob("[0-9]*"))
+    assert len(turn_paths) == 1
+    assert (turn_paths[0] / "prompt.md").read_text() == "what is 2+2?\n"
+
+
+def test_a_turn_after_undo_resumes_without_the_undone_one(lm: Lm) -> None:
+    lm.set_claude_result_success("4")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.set_editor_prompt("and 3+3?\n")
+    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("undo", "--thread", "demo", stdin="")
+    lm.set_editor_prompt("and 4+4?\n")
+    lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert lm.get_claude_session_prompts() == ["what is 2+2?", "and 4+4?"]
+
+
+def test_a_turn_after_undoing_every_turn_starts_a_new_session(lm: Lm) -> None:
+    lm.set_claude_result_success("4")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("undo", "--thread", "demo", stdin="")
+    lm.set_editor_prompt("and 3+3?\n")
+    lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert "--session-id" in lm.get_claude_argv()
+    assert lm.get_claude_session_prompts() == ["and 3+3?"]
+
+
+def test_undo_refuses_a_thread_without_turns(lm: Lm) -> None:
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("undo", "--thread", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "No turns to undo" in result.stderr
+
+
 def test_last_resumes_the_most_recent_thread(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_success("4")

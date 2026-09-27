@@ -165,6 +165,13 @@ def main() -> None:
     rm_parser.set_defaults(func=_execute_rm)
     _add_thread_args(rm_parser, required=True)
 
+    undo_parser = subparsers.add_parser(
+        "undo",
+        help="Remove the last turn of a thread.",
+    )
+    undo_parser.set_defaults(func=_execute_undo)
+    _add_thread_args(undo_parser, required=True)
+
     edit_prompt_parser = subparsers.add_parser(
         "edit-prompt",
         help="Edit prompt for the staged query.",
@@ -406,10 +413,39 @@ def _execute_rm(args: argparse.Namespace, env: _Environment) -> None:
     thread.system_prompt_path.unlink()
     thread.tools_path.unlink()
     thread.session_path.unlink(missing_ok=True)
+    thread.session_lines_path.unlink()
     thread.scratch_cwd_path.rmdir()
     thread.claude_path.rmdir()
 
     thread.path.rmdir()
+
+
+def _execute_undo(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    threads_path = env.data_path / THREADS_PATHNAME
+
+    thread = _get_thread(args.thread_choice, threads_path)
+
+    turns_count = _get_turns_count(thread)
+    if turns_count == 0:
+        sys.exit("No turns to undo.")
+
+    turn_lines_counts = [
+        int(line) for line in thread.session_lines_path.read_text().splitlines()
+    ]
+    kept_turn_lines_counts = turn_lines_counts[:-1]
+    # A thread without turns has no session
+    if len(kept_turn_lines_counts) == 0:
+        thread.session_path.unlink()
+    else:
+        lines = thread.session_path.read_text().split("\n")
+        kept_lines = lines[: sum(kept_turn_lines_counts)]
+        thread.session_path.write_text("\n".join(kept_lines) + "\n")
+    thread.session_lines_path.write_text(
+        "".join(f"{count}\n" for count in kept_turn_lines_counts)
+    )
+
+    _remove_turn(_Turn(thread.get_turn_path(turns_count - 1)))
 
 
 def _execute_edit_prompt(args: argparse.Namespace, env: _Environment) -> None:
@@ -642,6 +678,10 @@ class _Thread:
         return self.claude_path / "session.jsonl"
 
     @property
+    def session_lines_path(self) -> Path:
+        return self.claude_path / "session-lines"
+
+    @property
     def scratch_cwd_path(self) -> Path:
         return self.claude_path / "scratch-cwd"
 
@@ -774,6 +814,8 @@ def _create_thread(
     _write_read_only(thread.effort_path, claude_effort)
     _write_read_only(thread.system_prompt_path, claude_system_prompt)
     _write_read_only(thread.tools_path, claude_tools)
+
+    thread.session_lines_path.touch()
 
     return thread
 
@@ -1104,6 +1146,7 @@ def _handle_turn(
     with _ClaudeContext.create(
         projects_path=claude_projects_path,
         thread_session_path=thread.session_path,
+        thread_session_lines_path=thread.session_lines_path,
         scratch_cwd_path=thread.scratch_cwd_path,
         attachments_path=attachments_path,
     ) as (claude_session_args, claude_attachments_prompt):
@@ -1322,15 +1365,17 @@ class _ClaudeContext:
         self,
         session_id: str,
         thread_session_path: Path,
+        thread_session_lines_path: Path,
+        turn_lines_counts: tuple[int, ...],
         claude_session_path: Path,
-        thread_session_lines_count: int | None,
         scratch_cwd_path: Path,
         attachments_path: Path | None,
     ) -> None:
         self._session_id = session_id
         self._thread_session_path = thread_session_path
+        self._thread_session_lines_path = thread_session_lines_path
+        self._turn_lines_counts = turn_lines_counts
         self._claude_session_path = claude_session_path
-        self._thread_session_lines_count = thread_session_lines_count
         self._scratch_cwd_path = scratch_cwd_path
         self._attachments_path = attachments_path
 
@@ -1339,6 +1384,7 @@ class _ClaudeContext:
         *,
         projects_path: Path,
         thread_session_path: Path,
+        thread_session_lines_path: Path,
         scratch_cwd_path: Path,
         attachments_path: Path | None,
     ) -> _ClaudeContext:
@@ -1347,16 +1393,15 @@ class _ClaudeContext:
         project_path = projects_path / escaped_cwd
         id_ = str(uuid.uuid4())
         claude_session_path = project_path / f"{id_}.jsonl"
-        if thread_session_path.exists():
-            lines = thread_session_path.read_text().splitlines(keepends=True)
-            thread_session_lines_count: int | None = len(lines)
-        else:
-            thread_session_lines_count = None
+        turn_lines_counts = tuple(
+            int(line) for line in thread_session_lines_path.read_text().splitlines()
+        )
         return _ClaudeContext(
             id_,
             thread_session_path,
+            thread_session_lines_path,
+            turn_lines_counts,
             claude_session_path,
-            thread_session_lines_count,
             scratch_cwd_path,
             attachments_path,
         )
@@ -1365,7 +1410,7 @@ class _ClaudeContext:
         self._projects_path.mkdir(parents=True, exist_ok=True)
         self._project_path.mkdir()
 
-        if not self._thread_session_path.exists():
+        if len(self._turn_lines_counts) == 0:
             flag = "--session-id"
         else:
             flag = "--resume"
@@ -1404,20 +1449,22 @@ class _ClaudeContext:
             path.unlink()
 
         if exc_type is None:
-            return
-
-        # A failed turn leaves its prompt in the session, so the retry would send
-        # it a second time. The session holds one record per line. That claude
-        # only appends to it, and resumes one cut back to an earlier line, is
-        # observed on claude 2.1.283, not documented.
-        # Ref: https://code.claude.com/docs/en/sessions#where-transcripts-are-stored
-        if self._thread_session_lines_count is None:
+            lines_count = self._thread_session_path.read_text().count("\n")
+            added_lines_count = lines_count - sum(self._turn_lines_counts)
+            with self._thread_session_lines_path.open("a") as file:
+                file.write(f"{added_lines_count}\n")
+        elif len(self._turn_lines_counts) == 0:
+            # Claude can fail before it writes the session file at all
             self._thread_session_path.unlink(missing_ok=True)
-            return
-
-        lines = self._thread_session_path.read_text().splitlines(keepends=True)
-        kept_lines = lines[: self._thread_session_lines_count]
-        self._thread_session_path.write_text("".join(kept_lines))
+        else:
+            # Revert the changes made by claude to the session file, otherwise
+            # the retry would send the failed prompt a second time.
+            # 2.1.283 only appends to the session file, which we observed but the
+            # docs do not say.
+            # Ref: https://code.claude.com/docs/en/sessions#where-transcripts-are-stored
+            lines = self._thread_session_path.read_text().split("\n")
+            kept_lines = lines[: sum(self._turn_lines_counts)]
+            self._thread_session_path.write_text("\n".join(kept_lines) + "\n")
 
     @property
     def _project_path(self) -> Path:
