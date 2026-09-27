@@ -23,7 +23,7 @@ def test_run_saves_the_prompt_and_the_response(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert result.returncode == 0
     turn_path = lm.get_turn_path("demo", 0)
@@ -36,7 +36,7 @@ def test_run_sends_the_prompt_to_claude(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert lm.get_claude_prompt() == "what is 2+2?"
 
@@ -46,7 +46,7 @@ def test_run_sends_a_prompt_starting_with_a_hyphen(lm: Lm) -> None:
     lm.set_claude_result_success("ok")
 
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert result.returncode == 0
     assert lm.get_claude_prompt() == "- first item"
@@ -57,7 +57,7 @@ def test_run_keeps_user_config_out_of_the_turn(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert "--safe-mode" in lm.get_claude_argv()
 
@@ -67,7 +67,7 @@ def test_run_prints_the_response(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert "4" in result.stdout
 
@@ -77,7 +77,7 @@ def test_ls_lists_the_thread(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     result = lm.invoke("ls", stdin="")
 
     assert "demo" in result.stdout
@@ -90,7 +90,7 @@ def test_show_prints_the_exchange(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     result = lm.invoke("show", "--thread", "demo", stdin="")
 
     assert "what is 2+2?" in result.stdout
@@ -110,12 +110,69 @@ def test_run_without_a_thread_creates_one(lm: Lm) -> None:
     assert "what is 2+2?" in lm.invoke("ls", stdin="").stdout
 
 
+def test_run_with_a_name_creates_that_thread(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_result_success("4")
+
+    result = lm.invoke("run", "demo", stdin="")
+
+    assert result.returncode == 0
+    prompt_path = lm.get_turn_path("demo", 0) / "prompt.md"
+    assert prompt_path.read_text() == "what is 2+2?\n"
+
+
+def test_run_settings_reach_claude(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_result_success("4")
+
+    lm.invoke(
+        "run", "demo", "--claude-model", "claude-opus-5-5", "--with", "web", stdin=""
+    )
+
+    argv = lm.get_claude_argv()
+    assert argv[argv.index("--model") + 1] == "claude-opus-5-5"
+    assert argv[argv.index("--tools") + 1] == "WebFetch,WebSearch"
+
+
+def test_run_refuses_an_existing_thread(lm: Lm) -> None:
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("run", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "Thread already exists" in result.stderr
+    assert lm.get_editor_buffer() == ""
+
+
+def test_run_with_an_empty_prompt_creates_no_thread(lm: Lm) -> None:
+    lm.set_editor_prompt("")
+
+    result = lm.invoke("run", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert not lm.get_thread_path("demo").exists()
+
+
+def test_run_chat_runs_each_queued_prompt_as_a_turn(lm: Lm) -> None:
+    lm.set_claude_result_success("an answer")
+    lm.set_editor_prompts("first question\n", "second question\n")
+
+    result = lm.invoke("run", "demo", "--chat", stdin="")
+
+    assert result.returncode == 0
+    assert (lm.get_turn_path("demo", 0) / "prompt.md").read_text() == "first question\n"
+    assert (
+        lm.get_turn_path("demo", 1) / "prompt.md"
+    ).read_text() == "second question\n"
+    # The second turn resumed the session the first one started
+    assert lm.get_claude_session_prompts() == ["first question", "second question"]
+
+
 def test_rename_changes_a_thread_name(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "before", stdin="")
-    lm.invoke("run", "--thread", "before", stdin="")
+    lm.invoke("reply", "--thread", "before", stdin="")
     result = lm.invoke("rename", "--thread", "before", "after", stdin="")
 
     assert result.returncode == 0
@@ -128,10 +185,10 @@ def test_rename_allows_another_turn(lm: Lm) -> None:
 
     lm.invoke("new", "before", stdin="")
     lm.set_editor_prompt("first question\n")
-    lm.invoke("run", "--thread", "before", stdin="")
+    lm.invoke("reply", "--thread", "before", stdin="")
     lm.invoke("rename", "--thread", "before", "after", stdin="")
     lm.set_editor_prompt("second question\n")
-    result = lm.invoke("run", "--thread", "after", stdin="")
+    result = lm.invoke("reply", "--thread", "after", stdin="")
 
     assert result.returncode == 0
     assert (
@@ -146,7 +203,7 @@ def test_rm_deletes_a_thread(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     result = lm.invoke("rm", "--thread", "demo", stdin="")
 
     assert result.returncode == 0
@@ -158,9 +215,9 @@ def test_undo_stages_the_last_turn_again(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_editor_prompt("and 3+3?\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     result = lm.invoke("undo", "--thread", "demo", stdin="")
 
     assert result.returncode == 0
@@ -175,9 +232,9 @@ def test_a_commit_after_undo_resends_the_undone_prompt(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_editor_prompt("and 3+3?\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.invoke("undo", "--thread", "demo", stdin="")
     lm.set_claude_result_success("6")
     result = lm.invoke("commit", "--thread", "demo", stdin="")
@@ -193,7 +250,7 @@ def test_an_undone_prompt_can_be_edited_before_it_is_resent(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.invoke("undo", "--thread", "demo", stdin="")
     lm.set_editor_prompt("what is 3+3?\n")
     lm.invoke("edit-prompt", "--thread", "demo", stdin="")
@@ -208,7 +265,7 @@ def test_a_commit_after_undoing_every_turn_starts_a_new_session(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.invoke("undo", "--thread", "demo", stdin="")
     lm.invoke("commit", "--thread", "demo", stdin="")
 
@@ -221,7 +278,7 @@ def test_undo_refuses_with_a_staged_query(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.invoke("edit-prompt", "--thread", "demo", stdin="")
     result = lm.invoke("undo", "--thread", "demo", stdin="")
 
@@ -244,7 +301,7 @@ def test_last_resumes_the_most_recent_thread(lm: Lm) -> None:
 
     lm.invoke("new", "older", stdin="")
     lm.invoke("new", "newer", stdin="")
-    result = lm.invoke("run", "--last", stdin="")
+    result = lm.invoke("reply", "--last", stdin="")
 
     assert result.returncode == 0
     assert (lm.get_turn_path("newer", 0) / "prompt.md").read_text() == "what is 2+2?\n"
@@ -257,7 +314,7 @@ def test_select_picks_a_thread(lm: Lm) -> None:
     lm.invoke("new", "wanted", stdin="")
     lm.invoke("new", "other", stdin="")
     lm.set_selected_thread("wanted")
-    result = lm.invoke("run", "--select", stdin="")
+    result = lm.invoke("reply", "--select", stdin="")
 
     assert result.returncode == 0
     assert (lm.get_turn_path("wanted", 0) / "prompt.md").read_text() == "what is 2+2?\n"
@@ -271,7 +328,7 @@ def test_piped_stdin_reaches_claude(lm: Lm) -> None:
     lm.set_claude_result_success("done")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="PIPED CONTEXT")
+    lm.invoke("reply", "--thread", "demo", stdin="PIPED CONTEXT")
 
     assert lm.get_claude_stdin() == "PIPED CONTEXT"
 
@@ -281,7 +338,7 @@ def test_piped_stdin_is_saved_with_the_turn(lm: Lm) -> None:
     lm.set_claude_result_success("done")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="PIPED CONTEXT")
+    lm.invoke("reply", "--thread", "demo", stdin="PIPED CONTEXT")
 
     assert (lm.get_turn_path("demo", 0) / "stdin").read_text() == "PIPED CONTEXT"
 
@@ -291,7 +348,7 @@ def test_piped_stdin_does_not_reach_the_editor(lm: Lm) -> None:
     lm.set_claude_result_success("done")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="PIPED CONTEXT")
+    lm.invoke("reply", "--thread", "demo", stdin="PIPED CONTEXT")
 
     # The editor is handed the terminal, never the pipe lm was given
     assert "PIPED CONTEXT" not in lm.get_editor_buffer()
@@ -304,7 +361,7 @@ def test_attachment_is_saved_with_the_turn(lm: Lm, tmp_path: Path) -> None:
     attachment_path.write_text("ATTACHED TEXT")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", "--attach", str(attachment_path), stdin="")
+    lm.invoke("reply", "--thread", "demo", "--attach", str(attachment_path), stdin="")
 
     saved_path = lm.get_turn_path("demo", 0) / "attachments" / "notes.md"
     assert saved_path.read_text() == "ATTACHED TEXT"
@@ -317,7 +374,7 @@ def test_attachment_is_announced_to_claude(lm: Lm, tmp_path: Path) -> None:
     attachment_path.write_text("ATTACHED TEXT")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", "--attach", str(attachment_path), stdin="")
+    lm.invoke("reply", "--thread", "demo", "--attach", str(attachment_path), stdin="")
 
     assert "- @notes.md" in lm.get_claude_prompt()
 
@@ -330,7 +387,7 @@ def test_attachment_alias_renames_the_saved_file(lm: Lm, tmp_path: Path) -> None
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke(
-        "run", "--thread", "demo", "--attach", f"{attachment_path}:renamed.md", stdin=""
+        "reply", "--thread", "demo", "--attach", f"{attachment_path}:renamed.md", stdin=""
     )
 
     attachments_path = lm.get_turn_path("demo", 0) / "attachments"
@@ -344,7 +401,7 @@ def test_a_preset_is_offered_as_a_draft(lm: Lm) -> None:
     lm.set_claude_result_success("ok")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", "--preset", "review", stdin="")
+    lm.invoke("reply", "--thread", "demo", "--preset", "review", stdin="")
 
     assert "REVIEW THIS CODE" in lm.get_editor_buffer()
 
@@ -357,9 +414,9 @@ def test_second_run_starts_a_second_turn(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("first question\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_editor_prompt("second question\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert (lm.get_turn_path("demo", 0) / "prompt.md").read_text() == "first question\n"
     assert (
@@ -372,9 +429,9 @@ def test_past_turns_appear_in_the_editor(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("first question\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_editor_prompt("second question\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     buffer = lm.get_editor_buffer()
     assert "first question" in buffer
@@ -386,9 +443,9 @@ def test_past_turns_are_not_resent_to_claude(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("first question\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_editor_prompt("second question\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     # The session carries the history, so only the new prompt is sent
     assert "first question" not in lm.get_claude_prompt()
@@ -399,9 +456,9 @@ def test_a_second_turn_resumes_the_session(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("first question\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_editor_prompt("second question\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     # The second turn grew the session the first turn started
     assert lm.get_claude_session_prompts() == ["first question", "second question"]
@@ -413,11 +470,11 @@ def test_threads_keep_separate_sessions(lm: Lm) -> None:
     lm.invoke("new", "one", stdin="")
     lm.invoke("new", "two", stdin="")
     lm.set_editor_prompt("question for one\n")
-    lm.invoke("run", "--thread", "one", stdin="")
+    lm.invoke("reply", "--thread", "one", stdin="")
     lm.set_editor_prompt("question for two\n")
-    lm.invoke("run", "--thread", "two", stdin="")
+    lm.invoke("reply", "--thread", "two", stdin="")
     lm.set_editor_prompt("another question for one\n")
-    lm.invoke("run", "--thread", "one", stdin="")
+    lm.invoke("reply", "--thread", "one", stdin="")
 
     assert lm.get_claude_session_prompts() == [
         "question for one",
@@ -430,7 +487,7 @@ def test_chat_runs_each_queued_prompt_as_a_turn(lm: Lm) -> None:
     lm.set_editor_prompts("first question\n", "second question\n")
 
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("chat", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--chat", "--thread", "demo", stdin="")
 
     assert result.returncode == 0
     assert (lm.get_turn_path("demo", 0) / "prompt.md").read_text() == "first question\n"
@@ -444,7 +501,7 @@ def test_run_reports_a_compacted_session(lm: Lm) -> None:
     lm.set_claude_result_success_with_compaction("", 190000, "an answer")
 
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert "Compacted session at 190000 tokens" in result.stderr
     assert (lm.get_turn_path("demo", 0) / "response.md").read_text() == "an answer\n"
@@ -455,7 +512,7 @@ def test_a_compaction_starts_a_new_paragraph(lm: Lm) -> None:
     lm.set_claude_result_success_with_compaction("first half", 190000, "second half")
 
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
 
     # The notice goes to stderr, so it never lands inside the saved response
     assert "Compacted session at 190000 tokens" in result.stderr
@@ -471,7 +528,7 @@ def test_a_tool_call_shows_in_the_response(lm: Lm) -> None:
     )
 
     lm.invoke("new", "demo", "--with", "web", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert 'Running tool: WebSearch(query="lm cli")' in result.stdout
     assert (lm.get_turn_path("demo", 0) / "response.md").read_text() == (
@@ -484,7 +541,7 @@ def test_a_tool_call_before_any_text_opens_the_response(lm: Lm) -> None:
     lm.set_claude_result_success_with_tool_calls("", [("Now", {})], "found it")
 
     lm.invoke("new", "demo", "--with", "web", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert (
         lm.get_turn_path("demo", 0) / "response.md"
@@ -500,7 +557,7 @@ def test_a_tool_call_after_a_tool_call_starts_a_new_paragraph(lm: Lm) -> None:
     )
 
     lm.invoke("new", "demo", "--with", "web", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert (lm.get_turn_path("demo", 0) / "response.md").read_text() == (
         '> Running tool: WebSearch(query="lm")\n\n'
@@ -518,7 +575,7 @@ def test_a_tool_call_shows_every_argument_it_was_given(lm: Lm) -> None:
     )
 
     lm.invoke("new", "demo", "--with", "web", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert (lm.get_turn_path("demo", 0) / "response.md").read_text() == (
         '> Running tool: WebFetch(url="https://lm.dev", timeout=30, raw=false)\n\n'
@@ -612,7 +669,7 @@ def test_thread_model_reaches_claude(lm: Lm) -> None:
     lm.set_claude_result_success("hi")
 
     lm.invoke("new", "demo", "--claude-model", "claude-haiku-4-5", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     argv = lm.get_claude_argv()
     assert argv[argv.index("--model") + 1] == "claude-haiku-4-5"
@@ -624,7 +681,7 @@ def test_a_model_alias_reaches_claude_as_the_model_it_names(lm: Lm) -> None:
     lm.set_model_alias("fast", "claude-haiku-4-5")
 
     lm.invoke("new", "demo", "--claude-model", "fast", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     argv = lm.get_claude_argv()
     assert argv[argv.index("--model") + 1] == "claude-haiku-4-5"
@@ -635,7 +692,7 @@ def test_thread_effort_reaches_claude(lm: Lm) -> None:
     lm.set_claude_result_success("hi")
 
     lm.invoke("new", "demo", "--claude-effort", "high", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     argv = lm.get_claude_argv()
     assert argv[argv.index("--effort") + 1] == "high"
@@ -647,7 +704,7 @@ def test_the_default_system_prompt_reaches_a_thread_that_names_none(lm: Lm) -> N
     lm.set_default_system_prompt("Answer as a sommelier.")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     argv = lm.get_claude_argv()
     assert argv[argv.index("--system-prompt") + 1] == "Answer as a sommelier."
@@ -660,7 +717,7 @@ def test_thread_system_prompt_reaches_claude(lm: Lm) -> None:
     lm.set_system_prompt("pirate", "Answer as a pirate.")
 
     lm.invoke("new", "demo", "--system-prompt", "pirate", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     argv = lm.get_claude_argv()
     assert argv[argv.index("--system-prompt") + 1] == "Answer as a pirate."
@@ -671,7 +728,7 @@ def test_thread_capability_reaches_claude(lm: Lm) -> None:
     lm.set_claude_result_success("hi")
 
     lm.invoke("new", "demo", "--with", "web", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     argv = lm.get_claude_argv()
     assert argv[argv.index("--tools") + 1] == "WebFetch,WebSearch"
@@ -704,7 +761,7 @@ def test_a_thread_without_capabilities_gets_no_tools(lm: Lm) -> None:
     lm.set_claude_result_success("hi")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     argv = lm.get_claude_argv()
     assert argv[argv.index("--tools") + 1] == ""
@@ -717,7 +774,7 @@ def test_an_empty_prompt_creates_no_turn(lm: Lm) -> None:
     lm.set_editor_prompt("")
 
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert result.returncode != 0
     assert "Prompt is empty" in result.stderr
@@ -746,7 +803,7 @@ def test_run_reports_a_failed_inference(lm: Lm) -> None:
     lm.set_claude_result_error("", "error_max_turns", [])
 
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert result.returncode != 0
     assert "hit the turn limit" in result.stderr
@@ -758,7 +815,7 @@ def test_a_failed_inference_leaves_the_query_staged(lm: Lm) -> None:
     lm.set_claude_result_error("", "error_during_execution", [])
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_claude_result_success("4")
     result = lm.invoke("commit", "--thread", "demo", stdin="")
 
@@ -771,7 +828,7 @@ def test_a_retried_first_turn_is_in_the_session_once(lm: Lm) -> None:
     lm.set_claude_result_error("", "error_during_execution", [])
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_claude_result_success("4")
     lm.invoke("commit", "--thread", "demo", stdin="")
 
@@ -783,10 +840,10 @@ def test_a_retried_later_turn_is_in_the_session_once(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_editor_prompt("and 3+3?\n")
     lm.set_claude_result_absent("6")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_claude_result_success("6")
     lm.invoke("commit", "--thread", "demo", stdin="")
 
@@ -800,7 +857,7 @@ def test_run_reports_the_error_text_claude_gave(lm: Lm) -> None:
     )
 
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert result.returncode != 0
     assert "Reached maximum number of turns (30)" in result.stderr
@@ -811,7 +868,7 @@ def test_an_unknown_failure_names_its_subtype(lm: Lm) -> None:
     lm.set_claude_result_error("", "error_invented_later", [])
 
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert result.returncode != 0
     assert "error_invented_later" in result.stderr
@@ -822,7 +879,7 @@ def test_run_reports_a_stream_without_a_result(lm: Lm) -> None:
     lm.set_claude_result_absent("4")
 
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert result.returncode != 0
     assert "without reporting a result" in result.stderr
@@ -834,7 +891,7 @@ def test_run_refuses_with_a_staged_query(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke("edit-prompt", "--thread", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert result.returncode != 0
     assert "Staged query already exists" in result.stderr
@@ -868,7 +925,7 @@ def test_an_unknown_preset_is_rejected(lm: Lm) -> None:
     lm.set_editor_prompt("go\n")
 
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("run", "--thread", "demo", "--preset", "missing", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", "--preset", "missing", stdin="")
 
     assert result.returncode != 0
     assert "Preset not found" in result.stderr
@@ -882,7 +939,7 @@ def test_select_tells_apart_names_that_shorten_the_same(lm: Lm) -> None:
     lm.invoke("new", "project-alpha-notes", stdin="")
     lm.invoke("new", "project-beta-notes", stdin="")
     lm.set_selected_thread("project-alpha-notes")
-    result = lm.invoke("run", "--select", stdin="")
+    result = lm.invoke("reply", "--select", stdin="")
 
     assert result.returncode == 0
     prompt_path = lm.get_turn_path("project-alpha-notes", 0) / "prompt.md"
@@ -891,7 +948,7 @@ def test_select_tells_apart_names_that_shorten_the_same(lm: Lm) -> None:
 
 def test_select_refuses_when_nothing_is_picked(lm: Lm) -> None:
     lm.invoke("new", "demo", stdin="")
-    result = lm.invoke("run", "--select", stdin="")
+    result = lm.invoke("reply", "--select", stdin="")
 
     assert result.returncode != 0
     assert "No thread selected" in result.stderr
@@ -905,7 +962,7 @@ def test_committed_turn_files_are_read_only(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     turn_path = lm.get_turn_path("demo", 0)
     assert (turn_path / "prompt.md").stat().st_mode & 0o222 == 0
@@ -917,9 +974,9 @@ def test_a_turn_takes_the_whole_session_claude_wrote(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("a question\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_editor_prompt("another question\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     # Claude is still writing the session when it reports its result, so a turn
     # that moves the file without waiting takes half of it and leaves the rest
@@ -937,9 +994,9 @@ def test_vim_gets_the_prompt_below_the_history(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("first question\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_editor_prompt("second question\n")
-    lm.invoke("run", "--thread", "demo", "--preset", "draft", stdin="")
+    lm.invoke("reply", "--thread", "demo", "--preset", "draft", stdin="")
 
     buffer = lm.get_editor_buffer()
     assert buffer.index("first question") < buffer.index("MY DRAFT")
@@ -955,7 +1012,7 @@ def test_vim_is_told_to_jump_to_the_prompt(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
 
     assert "+$" in lm.get_editor_argv()
 
@@ -967,9 +1024,9 @@ def test_nano_gets_the_prompt_above_the_history(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     lm.set_editor_prompt("first question\n")
-    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.invoke("reply", "--thread", "demo", stdin="")
     lm.set_editor_prompt("second question\n")
-    lm.invoke("run", "--thread", "demo", "--preset", "draft", stdin="")
+    lm.invoke("reply", "--thread", "demo", "--preset", "draft", stdin="")
 
     buffer = lm.get_editor_buffer()
     assert buffer.index("MY DRAFT") < buffer.index("first question")

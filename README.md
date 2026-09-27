@@ -82,36 +82,46 @@ cat foo.py | lm run --preset review
 
 ### Threads
 
-Every run creates a new thread. Use `--thread` to name one and resume it across sessions:
+Every run starts a new thread, named after the time unless you name it. Reply to continue it across sessions:
 
 ```sh
-lm run --thread refactor
-cat error.log | lm run --thread debug
+lm run refactor
+lm reply --thread refactor
+cat error.log | lm reply --thread debug
 ```
 
-When resuming, past exchanges appear in the editor below a scissors line — visible for context, not sent again.
+When replying, past exchanges appear in the editor below a scissors line — visible for context, not sent again.
 
 Pick up where you left off:
 
 ```sh
-lm run --last          # resume the most recent thread
-lm run --select        # pick interactively with fzf
+lm reply --last        # reply in the most recent thread
+lm reply --select      # pick interactively with fzf
+```
+
+A thread's model and capabilities are set when it starts, by `run` or `new`:
+
+```sh
+lm run research --with web
+lm run --claude-model claude-haiku-4-5
+lm run --claude-effort high
+lm run --system-prompt pirate
 ```
 
 ### Chat
 
-Loop continuously in a single thread:
+Keep prompting after each response, until you leave a prompt empty:
 
 ```sh
-lm chat
-lm chat --thread mytopic
+lm run --chat
+lm reply --chat --thread mytopic
 ```
 
 ### Managing threads
 
 ```sh
 lm ls                 # list threads with last prompt/response summary
-lm new mytopic        # create a named thread
+lm new mytopic        # create a thread without running anything
 lm rename -t old new  # rename a thread
 lm rm -t mytopic      # delete a thread
 lm undo -t mytopic    # turn the last turn back into the staged query
@@ -119,14 +129,7 @@ lm show -t mytopic    # print the turns of a thread
 lm status -t mytopic  # show a thread's settings and staged query
 ```
 
-Create a thread with specific capabilities or model:
-
-```sh
-lm new research --with web
-lm new fast --claude-model claude-haiku-4-5
-lm new hard --claude-effort high
-lm new pirate --system-prompt pirate
-```
+`lm new` takes the same settings as `lm run`, for a thread you build a query in before sending it.
 
 ### Staged workflow
 

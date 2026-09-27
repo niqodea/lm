@@ -25,7 +25,7 @@ LM_TTY_ENV = "LM_TTY"
 INTERRUPT_EXIT_CODE = 130  # 128 + SIGINT
 
 THREADS_PATHNAME = "threads"
-TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE = ".{timestamp}-EDITMSG.md"
+NEW_THREAD_EDITMSG_PATHNAME_TEMPLATE = ".{name}-EDITMSG.md"
 
 ATTACHMENT_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -91,24 +91,24 @@ def main() -> None:
 
     run_parser = subparsers.add_parser(
         "run",
-        help="Run inference on a prompt.",
+        help="Start a new thread and run inference on its first prompt.",
     )
     run_parser.set_defaults(func=_execute_run)
-    _add_thread_args(run_parser, required=False)
     run_parser.add_argument(
-        "-p",
-        "--preset",
-        help="Preset name.",
+        "name",
+        nargs="?",
+        help="Thread name (default: a timestamp).",
     )
-    run_parser.add_argument(
-        "-a",
-        "--attach",
-        dest="attachments",
-        action="append",
-        default=[],
-        metavar="FILE[:ALIAS]",
-        help="File to attach and make available to the model (repeatable).",
+    _add_thread_settings_args(run_parser)
+    _add_query_args(run_parser)
+
+    reply_parser = subparsers.add_parser(
+        "reply",
+        help="Run inference on the next prompt of a thread.",
     )
+    reply_parser.set_defaults(func=_execute_reply)
+    _add_thread_args(reply_parser, required=True)
+    _add_query_args(reply_parser)
 
     new_parser = subparsers.add_parser(
         "new",
@@ -119,33 +119,7 @@ def main() -> None:
         "name",
         help="Thread name.",
     )
-    new_parser.add_argument(
-        "-m",
-        "--claude-model",
-        help="Claude model to use for this thread, or an alias from settings.",
-        default=DEFAULT_CLAUDE_MODEL,
-    )
-    new_parser.add_argument(
-        "-e",
-        "--claude-effort",
-        help="Claude effort level to use for this thread.",
-        choices=CLAUDE_EFFORTS,
-        default=DEFAULT_CLAUDE_EFFORT,
-    )
-    new_parser.add_argument(
-        "-S",
-        "--system-prompt",
-        help="Name of the system prompt to use for this thread.",
-    )
-    new_parser.add_argument(
-        "-w",
-        "--with",
-        dest="capabilities",
-        action="append",
-        default=[],
-        choices=list(CAPABILITY_CLAUDE_TOOLS),
-        help="Capabilities to enable for this thread (repeatable).",
-    )
+    _add_thread_settings_args(new_parser)
 
     rename_parser = subparsers.add_parser(
         "rename",
@@ -224,10 +198,6 @@ def main() -> None:
     status_parser.set_defaults(func=_execute_status)
     _add_thread_args(status_parser, required=True)
 
-    chat_parser = subparsers.add_parser("chat", help="Loop: edit prompt, run, repeat.")
-    chat_parser.set_defaults(func=_execute_chat)
-    _add_thread_args(chat_parser, required=False)
-
     args = parser.parse_args()
 
     env = _Environment.create()
@@ -236,6 +206,59 @@ def main() -> None:
         args.func(args, env)
     except KeyboardInterrupt:
         sys.exit(INTERRUPT_EXIT_CODE)
+
+
+def _add_thread_settings_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "-m",
+        "--claude-model",
+        help="Claude model to use for this thread, or an alias from settings.",
+        default=DEFAULT_CLAUDE_MODEL,
+    )
+    parser.add_argument(
+        "-e",
+        "--claude-effort",
+        help="Claude effort level to use for this thread.",
+        choices=CLAUDE_EFFORTS,
+        default=DEFAULT_CLAUDE_EFFORT,
+    )
+    parser.add_argument(
+        "-S",
+        "--system-prompt",
+        help="Name of the system prompt to use for this thread.",
+    )
+    parser.add_argument(
+        "-w",
+        "--with",
+        dest="capabilities",
+        action="append",
+        default=[],
+        choices=list(CAPABILITY_CLAUDE_TOOLS),
+        help="Capabilities to enable for this thread (repeatable).",
+    )
+
+
+def _add_query_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "-p",
+        "--preset",
+        help="Preset name.",
+    )
+    parser.add_argument(
+        "-a",
+        "--attach",
+        dest="attachments",
+        action="append",
+        default=[],
+        metavar="FILE[:ALIAS]",
+        help="File to attach and make available to the model (repeatable).",
+    )
+    parser.add_argument(
+        "-c",
+        "--chat",
+        action="store_true",
+        help="Keep prompting for the next turn until a prompt is left empty.",
+    )
 
 
 @dataclass(frozen=True)
@@ -304,79 +327,87 @@ def _execute_run(args: argparse.Namespace, env: _Environment) -> None:
     preset_name: str | None = args.preset
     draft = None if preset_name is None else _get_preset(preset_name, config_path)
     attachments = [_get_attachment(a) for a in args.attachments]
+    is_chat: bool = args.chat
+    settings = _get_thread_settings(args, config_path)
 
+    arg_name: str | None = args.name
+    name = env.started_at.strftime("%Y%m%d-%H%M%S") if arg_name is None else arg_name
+    _assert_thread_name_is_valid(name)
+    path = threads_path / name
+    _assert_thread_doesnt_exist(path)
+
+    # The thread is written only once there is a prompt for it, so abandoning
+    # the editor leaves no empty thread behind
+    editmsg_pathname = NEW_THREAD_EDITMSG_PATHNAME_TEMPLATE.format(name=name)
     try:
-        thread, prompt = _get_or_create_thread_with_prompt(
-            args.thread_choice,
-            threads_path,
-            config_path=config_path,
+        prompt = _edit_prompt(
+            threads_path / editmsg_pathname,
+            history=[],
             draft=draft,
             editor=env.editor,
             tty_path=env.tty_path,
-            started_at=env.started_at,
         )
     except _EmptyPromptError:
         sys.exit("Prompt is empty, exiting.")
 
-    staged = _Query(thread.staged_path)
-    staged.path.mkdir()
-    _write_prompt(staged, prompt)
+    sys.stderr.write(f"Creating new thread: {name}\n")
+    thread = _create_thread(path, settings)
 
-    if sys.stdin.isatty():
-        piped_stdin = ""
-    else:
-        piped_stdin = sys.stdin.read()
-        staged.stdin_path.write_text(piped_stdin)
-
-    if not attachments:
-        attachments_path = None
-    else:
-        attachments_path = staged.attachments_path
-        attachments_path.mkdir()
-        _write_attachments(attachments, attachments_path)
-
-    response = _handle_turn(
-        thread,
-        prompt=prompt,
-        piped_stdin=piped_stdin,
-        attachments_path=attachments_path,
-        char_delay=_get_char_delay_from_settings(config_path),
-        claude_projects_path=env.claude_projects_path,
+    piped_stdin = None if sys.stdin.isatty() else sys.stdin.read()
+    _send_turn(
+        thread, prompt, piped_stdin=piped_stdin, attachments=attachments, env=env
     )
 
-    _commit_staged(thread, response)
+    if is_chat:
+        _chat(thread, env)
 
 
-def _execute_new(args: argparse.Namespace, env: _Environment) -> None:
+def _execute_reply(args: argparse.Namespace, env: _Environment) -> None:
     _assert_initialized(env)
     config_path = env.config_path
     threads_path = env.data_path / THREADS_PATHNAME
 
-    name: str = args.name
-    capabilities: list[str] = args.capabilities
-    claude_model: str = args.claude_model
-    claude_effort: str = args.claude_effort
-    system_prompt_name: str | None = args.system_prompt
-    claude_system_prompt = (
-        _get_default_system_prompt(config_path)
-        if system_prompt_name is None
-        else _get_system_prompt(system_prompt_name, config_path)
+    preset_name: str | None = args.preset
+    draft = None if preset_name is None else _get_preset(preset_name, config_path)
+    attachments = [_get_attachment(a) for a in args.attachments]
+    is_chat: bool = args.chat
+
+    thread = _get_thread(args.thread_choice, threads_path)
+    _assert_no_staged_query(thread)
+
+    try:
+        prompt = _edit_prompt(
+            thread.editmsg_path,
+            history=_build_history(thread),
+            draft=draft,
+            editor=env.editor,
+            tty_path=env.tty_path,
+        )
+    except _EmptyPromptError:
+        sys.exit("Prompt is empty, exiting.")
+
+    piped_stdin = None if sys.stdin.isatty() else sys.stdin.read()
+    _send_turn(
+        thread, prompt, piped_stdin=piped_stdin, attachments=attachments, env=env
     )
+
+    if is_chat:
+        _chat(thread, env)
+
+
+def _execute_new(args: argparse.Namespace, env: _Environment) -> None:
+    _assert_initialized(env)
+    threads_path = env.data_path / THREADS_PATHNAME
+
+    name: str = args.name
+    settings = _get_thread_settings(args, env.config_path)
 
     _assert_thread_name_is_valid(name)
 
     path = threads_path / name
     _assert_thread_doesnt_exist(path)
 
-    _create_thread(
-        path,
-        claude_model=_resolve_claude_model(claude_model, config_path),
-        claude_effort=claude_effort,
-        claude_system_prompt=claude_system_prompt,
-        claude_tools=",".join(
-            t for c in capabilities for t in CAPABILITY_CLAUDE_TOOLS[c]
-        ),
-    )
+    _create_thread(path, settings)
 
 
 def _execute_rename(args: argparse.Namespace, env: _Environment) -> None:
@@ -589,55 +620,58 @@ def _execute_status(args: argparse.Namespace, env: _Environment) -> None:
     _write_paged(_format_status(thread), pager=env.pager)
 
 
-def _execute_chat(args: argparse.Namespace, env: _Environment) -> None:
-    _assert_initialized(env)
-    config_path = env.config_path
-    threads_path = env.data_path / THREADS_PATHNAME
+# --- turns
 
-    try:
-        thread, prompt = _get_or_create_thread_with_prompt(
-            args.thread_choice,
-            threads_path,
-            config_path=config_path,
-            draft=None,
-            editor=env.editor,
-            tty_path=env.tty_path,
-            started_at=env.started_at,
-        )
-    except _EmptyPromptError:
-        return
 
-    history = _build_history(thread)
+def _send_turn(
+    thread: _Thread,
+    prompt: str,
+    *,
+    piped_stdin: str | None,
+    attachments: list[tuple[Path, str]],
+    env: _Environment,
+) -> None:
+    """Run the prompt as the next turn of the thread, and save it."""
+    staged = _Query(thread.staged_path)
+    staged.path.mkdir()
+    _write_prompt(staged, prompt)
 
+    if piped_stdin is not None:
+        staged.stdin_path.write_text(piped_stdin)
+
+    if not attachments:
+        attachments_path = None
+    else:
+        attachments_path = staged.attachments_path
+        attachments_path.mkdir()
+        _write_attachments(attachments, attachments_path)
+
+    response = _handle_turn(
+        thread,
+        prompt=prompt,
+        piped_stdin="" if piped_stdin is None else piped_stdin,
+        attachments_path=attachments_path,
+        char_delay=_get_char_delay_from_settings(env.config_path),
+        claude_projects_path=env.claude_projects_path,
+    )
+    _commit_staged(thread, response)
+
+
+def _chat(thread: _Thread, env: _Environment) -> None:
+    """Keep prompting for the next turn of the thread until a prompt is empty."""
     while True:
-        staged = _Query(thread.staged_path)
-        staged.path.mkdir()
-        _write_prompt(staged, prompt)
-
-        response = _handle_turn(
-            thread,
-            prompt=prompt,
-            piped_stdin="",
-            attachments_path=None,
-            char_delay=_get_char_delay_from_settings(config_path),
-            claude_projects_path=env.claude_projects_path,
-        )
-
-        _commit_staged(thread, response)
-
-        history.append(
-            _HistoryEntry(prompt=prompt, attachment_names=(), response=response)
-        )
         try:
             prompt = _edit_prompt(
                 thread.editmsg_path,
-                history=history,
+                history=_build_history(thread),
                 draft=None,
                 editor=env.editor,
                 tty_path=env.tty_path,
             )
         except _EmptyPromptError:
             return
+
+        _send_turn(thread, prompt, piped_stdin=None, attachments=[], env=env)
 
 
 # --- threads
@@ -803,14 +837,39 @@ def _get_threads(threads_path: Path) -> list[_Thread]:
     return [_Thread(p) for p in paths]
 
 
-def _create_thread(
-    path: Path,
-    *,
-    claude_model: str,
-    claude_effort: str,
-    claude_system_prompt: str,
-    claude_tools: str,
-) -> _Thread:
+@dataclass(frozen=True)
+class _ThreadSettings:
+    """What a thread is created with, and keeps for every turn."""
+
+    claude_model: str
+    claude_effort: str
+    claude_system_prompt: str
+    claude_tools: str
+
+
+def _get_thread_settings(
+    args: argparse.Namespace, config_path: Path
+) -> _ThreadSettings:
+    capabilities: list[str] = args.capabilities
+    claude_model: str = args.claude_model
+    claude_effort: str = args.claude_effort
+    system_prompt_name: str | None = args.system_prompt
+    claude_system_prompt = (
+        _get_default_system_prompt(config_path)
+        if system_prompt_name is None
+        else _get_system_prompt(system_prompt_name, config_path)
+    )
+    return _ThreadSettings(
+        claude_model=_resolve_claude_model(claude_model, config_path),
+        claude_effort=claude_effort,
+        claude_system_prompt=claude_system_prompt,
+        claude_tools=",".join(
+            t for c in capabilities for t in CAPABILITY_CLAUDE_TOOLS[c]
+        ),
+    )
+
+
+def _create_thread(path: Path, settings: _ThreadSettings) -> _Thread:
     thread = _Thread(path)
 
     thread.path.mkdir()
@@ -818,10 +877,10 @@ def _create_thread(
     thread.scratch_cwd_path.mkdir()
 
     # We tie these to the thread for simplicity and not to bust cache
-    _write_read_only(thread.model_path, claude_model)
-    _write_read_only(thread.effort_path, claude_effort)
-    _write_read_only(thread.system_prompt_path, claude_system_prompt)
-    _write_read_only(thread.tools_path, claude_tools)
+    _write_read_only(thread.model_path, settings.claude_model)
+    _write_read_only(thread.effort_path, settings.claude_effort)
+    _write_read_only(thread.system_prompt_path, settings.claude_system_prompt)
+    _write_read_only(thread.tools_path, settings.claude_tools)
 
     thread.session_lines_path.touch()
 
@@ -974,54 +1033,6 @@ class _HistoryEntry:
     prompt: str
     attachment_names: tuple[str, ...]
     response: str
-
-
-def _get_or_create_thread_with_prompt(
-    choice: _ThreadChoice | None,
-    threads_path: Path,
-    *,
-    config_path: Path,
-    draft: str | None,
-    editor: str,
-    tty_path: Path,
-    started_at: datetime.datetime,
-) -> tuple[_Thread, str]:
-    if choice is not None:
-        thread = _get_thread(choice, threads_path)
-        _assert_no_staged_query(thread)
-        history = _build_history(thread)
-        prompt = _edit_prompt(
-            thread.editmsg_path,
-            history=history,
-            draft=draft,
-            editor=editor,
-            tty_path=tty_path,
-        )
-        return thread, prompt
-
-    thread_timestamp = started_at.strftime("%Y%m%d-%H%M%S")
-    editmsg_pathname = TIMESTAMP_EDITMSG_PATHNAME_TEMPLATE.format(
-        timestamp=thread_timestamp
-    )
-    # The thread is written only once there is a prompt for it, so abandoning
-    # the editor leaves no empty thread behind
-    prompt = _edit_prompt(
-        threads_path / editmsg_pathname,
-        history=[],
-        draft=draft,
-        editor=editor,
-        tty_path=tty_path,
-    )
-
-    sys.stderr.write(f"Creating new thread: {thread_timestamp}\n")
-    thread = _create_thread(
-        threads_path / thread_timestamp,
-        claude_model=DEFAULT_CLAUDE_MODEL,
-        claude_effort=DEFAULT_CLAUDE_EFFORT,
-        claude_system_prompt=_get_default_system_prompt(config_path),
-        claude_tools="",
-    )
-    return thread, prompt
 
 
 class _EmptyPromptError(Exception):
