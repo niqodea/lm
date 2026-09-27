@@ -161,7 +161,8 @@ class Lm:
         return self._get_json(protocol.CLAUDE_ARGV_ENV)
 
     def get_claude_prompt(self) -> str:
-        return self.get_claude_argv()[0]
+        argv = self.get_claude_argv()
+        return argv[argv.index("--") + 1]
 
     def get_claude_stdin(self) -> str:
         return self._get_stub_file_path(protocol.CLAUDE_STDIN_ENV).read_text()

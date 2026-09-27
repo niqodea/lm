@@ -1115,7 +1115,6 @@ def _handle_turn(
 
         command = [
             "claude",
-            claude_prompt,
             "--model",
             thread.model_path.read_text(),
             "--effort",
@@ -1141,6 +1140,9 @@ def _handle_turn(
             "--output-format",
             "stream-json",
             "--verbose",
+            # A prompt starting with a hyphen would otherwise be read as an option
+            "--",
+            claude_prompt,
         ]
 
         # Claude keeps writing the session file after the result it ends on, and

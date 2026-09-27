@@ -41,6 +41,17 @@ def test_run_sends_the_prompt_to_claude(lm: Lm) -> None:
     assert lm.get_claude_prompt() == "what is 2+2?"
 
 
+def test_run_sends_a_prompt_starting_with_a_hyphen(lm: Lm) -> None:
+    lm.set_editor_prompt("- first item\n")
+    lm.set_claude_result_success("ok")
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("run", "--thread", "demo", stdin="")
+
+    assert result.returncode == 0
+    assert lm.get_claude_prompt() == "- first item"
+
+
 def test_run_keeps_user_config_out_of_the_turn(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_success("4")

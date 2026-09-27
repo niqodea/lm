@@ -32,7 +32,7 @@ SESSION_WRITE_DELAY_SECONDS = 0.05
 
 def main() -> None:
     """Record the call lm made, then play the one run the test scripted."""
-    prompt = sys.argv[1]
+    prompt = sys.argv[sys.argv.index("--") + 1]
     Path(os.environ[CLAUDE_ARGV_ENV]).write_text(json.dumps(sys.argv[1:]))
     Path(os.environ[CLAUDE_STDIN_ENV]).write_text(sys.stdin.read())
 
