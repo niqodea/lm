@@ -5,7 +5,6 @@ import json
 import os
 import re
 import sys
-import time
 from pathlib import Path
 from typing import assert_never
 
@@ -24,10 +23,6 @@ from protocol import (
 )
 
 ERROR_RETURNCODE = 1
-
-# Claude is still writing the session file when it reports its result, so the
-# stub takes its time too, and a caller that does not wait moves the file early
-SESSION_WRITE_DELAY_SECONDS = 0.05
 
 
 def main() -> None:
@@ -69,6 +64,7 @@ def main() -> None:
     match script.ending:
         case ClaudeSuccess():
             _write_event({"type": "result", "subtype": "success", "is_error": False})
+            _wait_for_caller_to_stop_reading()
             returncode = 0
         case ClaudeError(subtype=subtype, errors=errors):
             _write_event(
@@ -79,13 +75,12 @@ def main() -> None:
                     "errors": errors,
                 }
             )
+            _wait_for_caller_to_stop_reading()
             returncode = ERROR_RETURNCODE
         case None:
             returncode = 0
         case _:
             assert_never(script.ending)
-
-    time.sleep(SESSION_WRITE_DELAY_SECONDS)
 
     project_path.mkdir(parents=True, exist_ok=True)
     with session_path.open("a") as session_file:
@@ -96,6 +91,24 @@ def main() -> None:
     Path(os.environ[CLAUDE_SESSION_ENV]).write_text(json.dumps(prompts))
 
     sys.exit(returncode)
+
+
+def _wait_for_caller_to_stop_reading() -> None:
+    """Write filler to stdout until caller closes it."""
+    # Claude writes the last of the session after the result, so the stub holds
+    # that write until lm is done with the run. Once lm stops reading, the pipe
+    # fills up and the next write waits, until lm closes the pipe.
+    # Ref: https://man7.org/linux/man-pages/man7/pipe.7.html
+    # This relies on lm never parsing past the result, and on lm closing the pipe
+    # right before it waits for claude to exit, as leaving a Popen block does. The
+    # stub cannot see lm waiting for it, so closing the pipe is the closest signal
+    # it has: an lm that closed the pipe and then slept instead of waiting would
+    # still pass.
+    try:
+        while True:
+            os.write(sys.stdout.fileno(), b"\n" * 4096)
+    except BrokenPipeError:
+        pass
 
 
 def _write_tool_call_event(name: str, arguments: dict[str, object]) -> None:
