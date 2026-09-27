@@ -147,6 +147,18 @@ lm status --thread mytopic               # see what is staged
 
 Store reusable instructions in `~/.config/lm/presets/<name>.md`. They're prepended to the editor buffer — refine or extend before sending.
 
+## Defaults
+
+A thread that names no model or effort gets `claude-sonnet-5` at `medium` effort. Set your own in `~/.config/lm/settings.toml`:
+
+```toml
+[defaults]
+model = "claude-opus-5-5"
+effort = "high"
+```
+
+The default model can be an alias. Like everything else about a thread, the defaults are read when it is created.
+
 ## Model aliases
 
 Name the models you reach for in `~/.config/lm/settings.toml`:

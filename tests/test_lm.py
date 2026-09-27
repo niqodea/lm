@@ -678,13 +678,56 @@ def test_thread_model_reaches_claude(lm: Lm) -> None:
 def test_a_model_alias_reaches_claude_as_the_model_it_names(lm: Lm) -> None:
     lm.set_editor_prompt("hello\n")
     lm.set_claude_result_success("hi")
-    lm.set_model_alias("fast", "claude-haiku-4-5")
+    lm.set_settings('[models]\nfast = "claude-haiku-4-5"\n')
 
     lm.invoke("new", "demo", "--claude-model", "fast", stdin="")
     lm.invoke("reply", "--thread", "demo", stdin="")
 
     argv = lm.get_claude_argv()
     assert argv[argv.index("--model") + 1] == "claude-haiku-4-5"
+
+
+def test_the_default_model_reaches_a_thread_that_names_none(lm: Lm) -> None:
+    lm.set_editor_prompt("hello\n")
+    lm.set_claude_result_success("hi")
+    lm.set_settings('[defaults]\nmodel = "claude-opus-5-5"\neffort = "high"\n')
+
+    lm.invoke("run", stdin="")
+
+    argv = lm.get_claude_argv()
+    assert argv[argv.index("--model") + 1] == "claude-opus-5-5"
+    assert argv[argv.index("--effort") + 1] == "high"
+
+
+def test_a_default_model_can_be_an_alias(lm: Lm) -> None:
+    lm.set_editor_prompt("hello\n")
+    lm.set_claude_result_success("hi")
+    lm.set_settings('[defaults]\nmodel = "fast"\n[models]\nfast = "claude-haiku-4-5"\n')
+
+    lm.invoke("run", stdin="")
+
+    argv = lm.get_claude_argv()
+    assert argv[argv.index("--model") + 1] == "claude-haiku-4-5"
+
+
+def test_a_thread_gets_the_built_in_defaults_when_settings_name_none(lm: Lm) -> None:
+    lm.set_editor_prompt("hello\n")
+    lm.set_claude_result_success("hi")
+
+    lm.invoke("run", stdin="")
+
+    argv = lm.get_claude_argv()
+    assert argv[argv.index("--model") + 1] == "claude-sonnet-5"
+    assert argv[argv.index("--effort") + 1] == "medium"
+
+
+def test_an_unknown_default_effort_is_rejected(lm: Lm) -> None:
+    lm.set_settings('[defaults]\neffort = "huge"\n')
+
+    result = lm.invoke("new", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "Unknown Claude effort: huge" in result.stderr
 
 
 def test_thread_effort_reaches_claude(lm: Lm) -> None:

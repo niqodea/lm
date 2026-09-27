@@ -34,7 +34,11 @@ SCISSORS_LINE = "<!-- ------------------------ >8 ------------------------ -->"
 INSERT_MODE_EDITORS = frozenset({"vim", "nvim"})
 PROMPT_IS_LAST_EDITORS = frozenset({"vi", "vim", "nvim"})
 
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+# Used when the settings name no default. A full model id rather than an alias
+# like "sonnet", which claude resolves again on every turn, so a thread would
+# change model when a new one is released.
+# Ref: https://code.claude.com/docs/en/model-config
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
 DEFAULT_CLAUDE_EFFORT = "medium"
 
 # claude only warns on an effort it does not know, so lm rejects one itself
@@ -70,8 +74,12 @@ DEFAULT_SYSTEM_PROMPT_PATHNAME = "default-system-prompt.md"
 DEFAULT_SYSTEM_PROMPT = """\
 You are a helpful assistant. Answer the question concisely.
 """
-SETTINGS_CHAR_DELAY_KEY = "char_delay"
+SETTINGS_OUTPUT_KEY = "output"
+SETTINGS_OUTPUT_CHAR_DELAY_KEY = "char_delay"
 SETTINGS_MODELS_KEY = "models"
+SETTINGS_DEFAULTS_KEY = "defaults"
+SETTINGS_DEFAULT_MODEL_KEY = "model"
+SETTINGS_DEFAULT_EFFORT_KEY = "effort"
 
 
 # --- commands
@@ -213,14 +221,12 @@ def _add_thread_settings_args(parser: argparse.ArgumentParser) -> None:
         "-m",
         "--claude-model",
         help="Claude model to use for this thread, or an alias from settings.",
-        default=DEFAULT_CLAUDE_MODEL,
     )
     parser.add_argument(
         "-e",
         "--claude-effort",
         help="Claude effort level to use for this thread.",
         choices=CLAUDE_EFFORTS,
-        default=DEFAULT_CLAUDE_EFFORT,
     )
     parser.add_argument(
         "-S",
@@ -851,9 +857,26 @@ def _get_thread_settings(
     args: argparse.Namespace, config_path: Path
 ) -> _ThreadSettings:
     capabilities: list[str] = args.capabilities
-    claude_model: str = args.claude_model
-    claude_effort: str = args.claude_effort
+    claude_model_arg: str | None = args.claude_model
+    claude_effort_arg: str | None = args.claude_effort
     system_prompt_name: str | None = args.system_prompt
+    claude_model = (
+        _get_default_from_settings(
+            SETTINGS_DEFAULT_MODEL_KEY, DEFAULT_CLAUDE_MODEL, config_path
+        )
+        if claude_model_arg is None
+        else claude_model_arg
+    )
+    claude_effort = (
+        _get_default_from_settings(
+            SETTINGS_DEFAULT_EFFORT_KEY, DEFAULT_CLAUDE_EFFORT, config_path
+        )
+        if claude_effort_arg is None
+        else claude_effort_arg
+    )
+    # The flag checks an effort it is given, but not one from the settings
+    if claude_effort not in CLAUDE_EFFORTS:
+        sys.exit(f"Unknown Claude effort: {claude_effort}")
     claude_system_prompt = (
         _get_default_system_prompt(config_path)
         if system_prompt_name is None
@@ -1650,10 +1673,26 @@ def _get_system_prompt(name: str, config_path: Path) -> str:
 def _get_char_delay_from_settings(config_path: Path) -> float:
     settings_path = config_path / SETTINGS_PATHNAME
     settings = tomllib.loads(settings_path.read_text())
-    char_delay = settings.get(SETTINGS_CHAR_DELAY_KEY, 0.0)
+    output = settings.get(SETTINGS_OUTPUT_KEY, {})
+    if not isinstance(output, dict):
+        sys.exit(f"Setting {SETTINGS_OUTPUT_KEY} must be a table: {output}")
+    key = f"{SETTINGS_OUTPUT_KEY}.{SETTINGS_OUTPUT_CHAR_DELAY_KEY}"
+    char_delay = output.get(SETTINGS_OUTPUT_CHAR_DELAY_KEY, 0.0)
     if not isinstance(char_delay, float):
-        sys.exit(f"Setting {SETTINGS_CHAR_DELAY_KEY} must be a float: {char_delay}")
+        sys.exit(f"Setting {key} must be a float: {char_delay}")
     return char_delay
+
+
+def _get_default_from_settings(key: str, fallback: str, config_path: Path) -> str:
+    settings_path = config_path / SETTINGS_PATHNAME
+    settings = tomllib.loads(settings_path.read_text())
+    defaults = settings.get(SETTINGS_DEFAULTS_KEY, {})
+    if not isinstance(defaults, dict):
+        sys.exit(f"Setting {SETTINGS_DEFAULTS_KEY} must be a table: {defaults}")
+    value = defaults.get(key, fallback)
+    if not isinstance(value, str):
+        sys.exit(f"Setting {SETTINGS_DEFAULTS_KEY}.{key} must be a string: {value}")
+    return value
 
 
 def _resolve_claude_model(model: str, config_path: Path) -> str:
