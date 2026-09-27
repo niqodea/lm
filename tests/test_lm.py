@@ -681,6 +681,33 @@ def test_a_failed_inference_leaves_the_query_staged(lm: Lm) -> None:
     assert lm.get_claude_prompt() == "what is 2+2?"
 
 
+def test_a_retried_first_turn_is_in_the_session_once(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_result_error("", "error_during_execution", [])
+
+    lm.invoke("new", "demo", stdin="")
+    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.set_claude_result_success("4")
+    lm.invoke("commit", "--thread", "demo", stdin="")
+
+    assert lm.get_claude_session_prompts() == ["what is 2+2?"]
+
+
+def test_a_retried_later_turn_is_in_the_session_once(lm: Lm) -> None:
+    lm.set_claude_result_success("4")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.set_editor_prompt("and 3+3?\n")
+    lm.set_claude_result_absent("6")
+    lm.invoke("run", "--thread", "demo", stdin="")
+    lm.set_claude_result_success("6")
+    lm.invoke("commit", "--thread", "demo", stdin="")
+
+    assert lm.get_claude_session_prompts() == ["what is 2+2?", "and 3+3?"]
+
+
 def test_run_reports_the_error_text_claude_gave(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_error(

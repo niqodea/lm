@@ -12,11 +12,9 @@
 - Consider whether to have more than just data as local, like git does (e.g. config overrides).
 - Make the system prompt a thread setting, like model, effort and tools.
   Presets are a different thing: they seed the editor buffer, not the turn.
-- Track the session file by line count instead of parsing it.
-  A count stored per turn detects the residue a failed turn leaves behind, and makes undoing a turn a truncation.
-  Its records are the interactive CLI's own state (atis-latch, ai-title, queue-operation), so reading them bets on names nobody promised.
-  Verify first that claude only ever appends, and that it resumes from a truncated file.
-
+- Store the session line count per turn, like the one a failed turn is already cut back to.
+  It detects the residue of a turn killed before lm could cut it back, and makes undoing a turn a truncation.
+  Count lines rather than parse records: they are the interactive CLI's own state (atis-latch, ai-title, queue-operation), so reading them bets on names nobody promised.
 # Aspirational
 - Metacommands for thread management (Claude understands which thread to clean, which to rename, etc. and comes up with a plan).
   Should this reside in this tool? Perhaps we could consider differentiating this tool (plain lm) vs self-referential utilities (organizing threads is the obvious use case for now).

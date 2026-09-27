@@ -1323,12 +1323,14 @@ class _ClaudeContext:
         session_id: str,
         thread_session_path: Path,
         claude_session_path: Path,
+        thread_session_lines_count: int | None,
         scratch_cwd_path: Path,
         attachments_path: Path | None,
     ) -> None:
         self._session_id = session_id
         self._thread_session_path = thread_session_path
         self._claude_session_path = claude_session_path
+        self._thread_session_lines_count = thread_session_lines_count
         self._scratch_cwd_path = scratch_cwd_path
         self._attachments_path = attachments_path
 
@@ -1345,10 +1347,16 @@ class _ClaudeContext:
         project_path = projects_path / escaped_cwd
         id_ = str(uuid.uuid4())
         claude_session_path = project_path / f"{id_}.jsonl"
+        if thread_session_path.exists():
+            lines = thread_session_path.read_text().splitlines(keepends=True)
+            thread_session_lines_count: int | None = len(lines)
+        else:
+            thread_session_lines_count = None
         return _ClaudeContext(
             id_,
             thread_session_path,
             claude_session_path,
+            thread_session_lines_count,
             scratch_cwd_path,
             attachments_path,
         )
@@ -1394,6 +1402,22 @@ class _ClaudeContext:
 
         for path in self._scratch_cwd_path.iterdir():
             path.unlink()
+
+        if exc_type is None:
+            return
+
+        # A failed turn leaves its prompt in the session, so the retry would send
+        # it a second time. The session holds one record per line. That claude
+        # only appends to it, and resumes one cut back to an earlier line, is
+        # observed on claude 2.1.283, not documented.
+        # Ref: https://code.claude.com/docs/en/sessions#where-transcripts-are-stored
+        if self._thread_session_lines_count is None:
+            self._thread_session_path.unlink(missing_ok=True)
+            return
+
+        lines = self._thread_session_path.read_text().splitlines(keepends=True)
+        kept_lines = lines[: self._thread_session_lines_count]
+        self._thread_session_path.write_text("".join(kept_lines))
 
     @property
     def _project_path(self) -> Path:
