@@ -7,6 +7,7 @@ first, then the documented workflows, then refusals and details.
 from pathlib import Path
 
 from .conftest import Lm
+from .stubs.protocol import ClaudeToolCall
 
 # --- The core loop ---
 
@@ -18,7 +19,7 @@ def test_new_creates_a_thread(lm: Lm) -> None:
     assert lm.get_thread_path("demo").is_dir()
 
 
-def test_run_saves_the_prompt_and_the_response(lm: Lm) -> None:
+def test_reply_saves_the_prompt_and_the_response(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_success("4")
 
@@ -31,7 +32,7 @@ def test_run_saves_the_prompt_and_the_response(lm: Lm) -> None:
     assert (turn_path / "response.md").read_text() == "4\n"
 
 
-def test_run_sends_the_prompt_to_claude(lm: Lm) -> None:
+def test_reply_sends_the_prompt_to_claude(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_success("4")
 
@@ -41,7 +42,7 @@ def test_run_sends_the_prompt_to_claude(lm: Lm) -> None:
     assert lm.get_claude_prompt() == "what is 2+2?"
 
 
-def test_run_sends_a_prompt_starting_with_a_hyphen(lm: Lm) -> None:
+def test_reply_sends_a_prompt_starting_with_a_hyphen(lm: Lm) -> None:
     lm.set_editor_prompt("- first item\n")
     lm.set_claude_result_success("ok")
 
@@ -52,7 +53,7 @@ def test_run_sends_a_prompt_starting_with_a_hyphen(lm: Lm) -> None:
     assert lm.get_claude_prompt() == "- first item"
 
 
-def test_run_keeps_user_config_out_of_the_turn(lm: Lm) -> None:
+def test_reply_keeps_user_config_out_of_the_turn(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_success("4")
 
@@ -62,7 +63,7 @@ def test_run_keeps_user_config_out_of_the_turn(lm: Lm) -> None:
     assert "--safe-mode" in lm.get_claude_argv()
 
 
-def test_run_prints_the_response(lm: Lm) -> None:
+def test_reply_prints_the_response(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_success("4")
 
@@ -105,9 +106,10 @@ def test_run_without_a_thread_creates_one(lm: Lm) -> None:
     lm.set_claude_result_success("4")
 
     result = lm.invoke("run", stdin="")
+    ls_result = lm.invoke("ls", stdin="")
 
     assert result.returncode == 0
-    assert "what is 2+2?" in lm.invoke("ls", stdin="").stdout
+    assert "what is 2+2?" in ls_result.stdout
 
 
 def test_run_with_a_name_creates_that_thread(lm: Lm) -> None:
@@ -154,7 +156,7 @@ def test_run_with_an_empty_prompt_creates_no_thread(lm: Lm) -> None:
 
 def test_run_chat_runs_each_queued_prompt_as_a_turn(lm: Lm) -> None:
     lm.set_claude_result_success("an answer")
-    lm.set_editor_prompts("first question\n", "second question\n")
+    lm.set_editor_prompts(["first question\n", "second question\n"])
 
     result = lm.invoke("run", "demo", "--chat", stdin="")
 
@@ -219,12 +221,13 @@ def test_undo_stages_the_last_turn_again(lm: Lm) -> None:
     lm.set_editor_prompt("and 3+3?\n")
     lm.invoke("reply", "--thread", "demo", stdin="")
     result = lm.invoke("undo", "--thread", "demo", stdin="")
+    status_result = lm.invoke("status", "-t", "demo", stdin="")
 
     assert result.returncode == 0
     turn_paths = list(lm.get_thread_path("demo").glob("[0-9]*"))
     assert len(turn_paths) == 1
     assert (turn_paths[0] / "prompt.md").read_text() == "what is 2+2?\n"
-    assert "and 3+3?" in lm.invoke("status", "-t", "demo", stdin="").stdout
+    assert "and 3+3?" in status_result.stdout
 
 
 def test_a_commit_after_undo_resends_the_undone_prompt(lm: Lm) -> None:
@@ -246,6 +249,7 @@ def test_a_commit_after_undo_resends_the_undone_prompt(lm: Lm) -> None:
 
 
 def test_an_undone_prompt_can_be_edited_before_it_is_resent(lm: Lm) -> None:
+    lm.set_editor("nano")
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
@@ -274,7 +278,7 @@ def test_a_commit_after_undoing_every_turn_starts_a_new_session(lm: Lm) -> None:
 
 
 def test_undo_refuses_with_a_staged_query(lm: Lm) -> None:
-    lm.set_editor_prompts("what is 2+2?\n", "and 3+3?\n")
+    lm.set_editor_prompts(["what is 2+2?\n", "and 3+3?\n"])
     lm.set_claude_result_success("4")
 
     lm.invoke("new", "demo", stdin="")
@@ -387,7 +391,12 @@ def test_attachment_alias_renames_the_saved_file(lm: Lm, tmp_path: Path) -> None
 
     lm.invoke("new", "demo", stdin="")
     lm.invoke(
-        "reply", "--thread", "demo", "--attach", f"{attachment_path}:renamed.md", stdin=""
+        "reply",
+        "--thread",
+        "demo",
+        "--attach",
+        f"{attachment_path}:renamed.md",
+        stdin="",
     )
 
     attachments_path = lm.get_turn_path("demo", 0) / "attachments"
@@ -409,7 +418,7 @@ def test_a_preset_is_offered_as_a_draft(lm: Lm) -> None:
 # --- Several turns ---
 
 
-def test_second_run_starts_a_second_turn(lm: Lm) -> None:
+def test_a_second_reply_starts_a_second_turn(lm: Lm) -> None:
     lm.set_claude_result_success("an answer")
 
     lm.invoke("new", "demo", stdin="")
@@ -484,7 +493,7 @@ def test_threads_keep_separate_sessions(lm: Lm) -> None:
 
 def test_chat_runs_each_queued_prompt_as_a_turn(lm: Lm) -> None:
     lm.set_claude_result_success("an answer")
-    lm.set_editor_prompts("first question\n", "second question\n")
+    lm.set_editor_prompts(["first question\n", "second question\n"])
 
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("reply", "--chat", "--thread", "demo", stdin="")
@@ -496,7 +505,7 @@ def test_chat_runs_each_queued_prompt_as_a_turn(lm: Lm) -> None:
     ).read_text() == "second question\n"
 
 
-def test_run_reports_a_compacted_session(lm: Lm) -> None:
+def test_reply_reports_a_compacted_session(lm: Lm) -> None:
     lm.set_editor_prompt("a question\n")
     lm.set_claude_result_success_with_compaction("", 190000, "an answer")
 
@@ -524,7 +533,9 @@ def test_a_compaction_starts_a_new_paragraph(lm: Lm) -> None:
 def test_a_tool_call_shows_in_the_response(lm: Lm) -> None:
     lm.set_editor_prompt("a question\n")
     lm.set_claude_result_success_with_tool_calls(
-        "looking it up", [("WebSearch", {"query": "lm cli"})], "found it"
+        "looking it up",
+        [ClaudeToolCall(name="WebSearch", arguments={"query": "lm cli"})],
+        "found it",
     )
 
     lm.invoke("new", "demo", "--with", "web", stdin="")
@@ -538,7 +549,9 @@ def test_a_tool_call_shows_in_the_response(lm: Lm) -> None:
 
 def test_a_tool_call_before_any_text_opens_the_response(lm: Lm) -> None:
     lm.set_editor_prompt("a question\n")
-    lm.set_claude_result_success_with_tool_calls("", [("Now", {})], "found it")
+    lm.set_claude_result_success_with_tool_calls(
+        "", [ClaudeToolCall(name="Now", arguments={})], "found it"
+    )
 
     lm.invoke("new", "demo", "--with", "web", stdin="")
     lm.invoke("reply", "--thread", "demo", stdin="")
@@ -552,7 +565,10 @@ def test_a_tool_call_after_a_tool_call_starts_a_new_paragraph(lm: Lm) -> None:
     lm.set_editor_prompt("a question\n")
     lm.set_claude_result_success_with_tool_calls(
         "",
-        [("WebSearch", {"query": "lm"}), ("WebFetch", {"url": "https://lm.dev"})],
+        [
+            ClaudeToolCall(name="WebSearch", arguments={"query": "lm"}),
+            ClaudeToolCall(name="WebFetch", arguments={"url": "https://lm.dev"}),
+        ],
         "found it",
     )
 
@@ -570,7 +586,12 @@ def test_a_tool_call_shows_every_argument_it_was_given(lm: Lm) -> None:
     lm.set_editor_prompt("a question\n")
     lm.set_claude_result_success_with_tool_calls(
         "",
-        [("WebFetch", {"url": "https://lm.dev", "timeout": 30, "raw": False})],
+        [
+            ClaudeToolCall(
+                name="WebFetch",
+                arguments={"url": "https://lm.dev", "timeout": 30, "raw": False},
+            )
+        ],
         "found it",
     )
 
@@ -591,9 +612,10 @@ def test_edit_prompt_stages_a_prompt(lm: Lm) -> None:
 
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("edit-prompt", "--thread", "demo", stdin="")
+    status_result = lm.invoke("status", "-t", "demo", stdin="")
 
     assert result.returncode == 0
-    assert "staged question" in lm.invoke("status", "-t", "demo", stdin="").stdout
+    assert "staged question" in status_result.stdout
 
 
 def test_status_shows_the_staged_query(lm: Lm, tmp_path: Path) -> None:
@@ -641,9 +663,10 @@ def test_commit_turns_the_staged_query_into_a_turn(lm: Lm) -> None:
     lm.invoke("new", "demo", stdin="")
     lm.invoke("edit-prompt", "--thread", "demo", stdin="")
     result = lm.invoke("commit", "--thread", "demo", stdin="")
+    status_result = lm.invoke("status", "-t", "demo", stdin="")
 
     assert result.returncode == 0
-    assert "Nothing staged." in lm.invoke("status", "-t", "demo", stdin="").stdout
+    assert "Nothing staged." in status_result.stdout
     turn_path = lm.get_turn_path("demo", 0)
     assert (turn_path / "prompt.md").read_text() == "staged question\n"
     assert (turn_path / "response.md").read_text() == "staged answer\n"
@@ -655,9 +678,10 @@ def test_clear_discards_the_staged_query(lm: Lm) -> None:
     lm.invoke("new", "demo", stdin="")
     lm.invoke("edit-prompt", "--thread", "demo", stdin="")
     result = lm.invoke("clear", "--thread", "demo", stdin="")
+    status_result = lm.invoke("status", "-t", "demo", stdin="")
 
     assert result.returncode == 0
-    assert "Nothing staged." in lm.invoke("status", "-t", "demo", stdin="").stdout
+    assert "Nothing staged." in status_result.stdout
     assert list(lm.get_thread_path("demo").glob("[0-9]*")) == []
 
 
@@ -824,6 +848,13 @@ def test_an_empty_prompt_creates_no_turn(lm: Lm) -> None:
     assert not list(lm.get_thread_path("demo").glob("[0-9]*"))
 
 
+def test_lm_without_a_command_shows_the_usage(lm: Lm) -> None:
+    result = lm.invoke(stdin="")
+
+    assert result.returncode != 0
+    assert "the following arguments are required: command" in result.stderr
+
+
 def test_rename_refuses_an_existing_destination(lm: Lm) -> None:
     lm.invoke("new", "before", stdin="")
     lm.invoke("new", "after", stdin="")
@@ -841,7 +872,7 @@ def test_rm_refuses_an_unknown_thread(lm: Lm) -> None:
     assert "Thread does not exist" in result.stderr
 
 
-def test_run_reports_a_failed_inference(lm: Lm) -> None:
+def test_reply_reports_a_failed_inference(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_error("", "error_max_turns", [])
 
@@ -893,7 +924,7 @@ def test_a_retried_later_turn_is_in_the_session_once(lm: Lm) -> None:
     assert lm.get_claude_session_prompts() == ["what is 2+2?", "and 3+3?"]
 
 
-def test_run_reports_the_error_text_claude_gave(lm: Lm) -> None:
+def test_reply_reports_the_error_text_claude_gave(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_error(
         "", "error_max_turns", ["Reached maximum number of turns (30)"]
@@ -917,7 +948,7 @@ def test_an_unknown_failure_names_its_subtype(lm: Lm) -> None:
     assert "error_invented_later" in result.stderr
 
 
-def test_run_reports_a_stream_without_a_result(lm: Lm) -> None:
+def test_reply_reports_a_stream_without_a_result(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_absent("4")
 
@@ -929,7 +960,7 @@ def test_run_reports_a_stream_without_a_result(lm: Lm) -> None:
     assert not list(lm.get_thread_path("demo").glob("[0-9]*"))
 
 
-def test_run_refuses_with_a_staged_query(lm: Lm) -> None:
+def test_reply_refuses_with_a_staged_query(lm: Lm) -> None:
     lm.set_editor_prompt("staged question\n")
 
     lm.invoke("new", "demo", stdin="")
@@ -949,7 +980,7 @@ def test_commit_refuses_without_a_staged_query(lm: Lm) -> None:
     assert "No staged query found" in result.stderr
 
 
-def test_an_unnamed_thread_is_rejected(lm: Lm) -> None:
+def test_an_invalid_thread_name_is_rejected(lm: Lm) -> None:
     result = lm.invoke("new", "../escape", stdin="")
 
     assert result.returncode != 0
@@ -962,6 +993,47 @@ def test_an_unknown_system_prompt_is_rejected(lm: Lm) -> None:
     assert result.returncode != 0
     assert "System prompt not found" in result.stderr
     assert not lm.get_thread_path("demo").exists()
+
+
+def test_run_refuses_two_attachments_with_one_alias(lm: Lm, tmp_path: Path) -> None:
+    lm.set_editor_prompt("read these\n")
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "notes.md").write_text("FIRST")
+    (tmp_path / "b").mkdir()
+    (tmp_path / "b" / "notes.md").write_text("SECOND")
+
+    result = lm.invoke(
+        "run",
+        "demo",
+        "--attach",
+        str(tmp_path / "a" / "notes.md"),
+        "--attach",
+        str(tmp_path / "b" / "notes.md"),
+        stdin="",
+    )
+
+    assert result.returncode != 0
+    assert "Attachment alias given twice: notes.md" in result.stderr
+    assert not lm.get_thread_path("demo").exists()
+
+
+def test_attach_refuses_an_alias_already_staged(lm: Lm, tmp_path: Path) -> None:
+    lm.set_editor_prompt("read these\n")
+    first_path = tmp_path / "notes.md"
+    first_path.write_text("FIRST")
+    (tmp_path / "other").mkdir()
+    second_path = tmp_path / "other" / "notes.md"
+    second_path.write_text("SECOND")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.invoke("edit-prompt", "--thread", "demo", stdin="")
+    lm.invoke("attach", "--thread", "demo", str(first_path), stdin="")
+    result = lm.invoke("attach", "--thread", "demo", str(second_path), stdin="")
+
+    assert result.returncode != 0
+    assert "Attachment already exists with alias 'notes.md'" in result.stderr
+    staged_path = lm.get_thread_path("demo") / "STAGED" / "attachments" / "notes.md"
+    assert staged_path.read_text() == "FIRST"
 
 
 def test_an_unknown_preset_is_rejected(lm: Lm) -> None:

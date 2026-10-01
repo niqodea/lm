@@ -11,6 +11,8 @@ from .stubs import protocol
 LM_PATH = Path(__file__).parent / "lm"
 STUBS_PATH = Path(__file__).parent / "stubs"
 
+# A run takes well under a second, so this only stops a hung stub from stalling
+# the suite
 RUN_TIMEOUT_SECONDS = 30.0
 
 
@@ -59,7 +61,7 @@ class Lm:
         return lm
 
     def invoke(self, *args: str, stdin: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(  # noqa: S603
+        return subprocess.run(  # noqa: S603  (the command is the lm under test)
             [str(LM_PATH), *args],
             env=self._env,
             input=stdin,
@@ -73,11 +75,11 @@ class Lm:
         self._env["EDITOR"] = str(self._root_path / "bin" / name)
 
     def set_editor_prompt(self, prompt: str) -> None:
-        self.set_editor_prompts(prompt)
+        self.set_editor_prompts([prompt])
 
-    def set_editor_prompts(self, *prompts: str) -> None:
+    def set_editor_prompts(self, prompts: list[str]) -> None:
         """Queue one prompt per editor run, so a chat loop ends when they run out."""
-        queued = protocol.PromptQueue(prompts=prompts).to_text()
+        queued = protocol.PromptQueue(prompts=tuple(prompts)).to_text()
         self._get_stub_file_path(protocol.EDITOR_PROMPTS_ENV).write_text(queued)
 
     def set_claude_result_success(self, text: str) -> None:
@@ -89,17 +91,14 @@ class Lm:
     def set_claude_result_success_with_tool_calls(
         self,
         text_before: str,
-        tool_calls: list[tuple[str, dict[str, object]]],
+        tool_calls: list[protocol.ClaudeToolCall],
         text: str,
     ) -> None:
-        """Make the claude stub call these (name, arguments) tools mid-response."""
+        """Make the claude stub call these tools mid-response."""
         self._set_claude_run(
             (
                 protocol.ClaudeText(text=text_before),
-                *[
-                    protocol.ClaudeToolCall(name=name, arguments=arguments)
-                    for name, arguments in tool_calls
-                ],
+                *tool_calls,
                 protocol.ClaudeText(text=text),
             ),
             protocol.ClaudeSuccess(),

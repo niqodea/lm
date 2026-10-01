@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, assert_never
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from types import TracebackType
 
 LM_DATA_DIR_ENV = "LM_DATA_DIR"
@@ -27,7 +28,7 @@ INTERRUPT_EXIT_CODE = 130  # 128 + SIGINT
 THREADS_PATHNAME = "threads"
 NEW_THREAD_EDITMSG_PATHNAME_TEMPLATE = ".{name}-EDITMSG.md"
 
-ATTACHMENT_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+ATTACHMENT_MAX_SIZE_BYTES = 10 * 1024 * 1024
 
 SCISSORS_LINE = "<!-- ------------------------ >8 ------------------------ -->"
 
@@ -41,14 +42,16 @@ PROMPT_IS_LAST_EDITORS = frozenset({"vi", "vim", "nvim"})
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
 DEFAULT_CLAUDE_EFFORT = "medium"
 
-# claude only warns on an effort it does not know, so lm rejects one itself
+# claude only warns on an unknown effort, so lm rejects one itself
 CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
-CAPABILITY_CLAUDE_TOOLS = {"web": ("WebFetch", "WebSearch")}
+CAPABILITY_CLAUDE_TOOLS: Mapping[str, tuple[str, ...]] = {
+    "web": ("WebFetch", "WebSearch")
+}
 
 # A failed turn reports itself as a result event with one of these subtypes.
 # Ref: https://code.claude.com/docs/en/agent-sdk/agent-loop#handle-the-result
-CLAUDE_ERROR_SUBTYPE_REASONS = {
+CLAUDE_ERROR_SUBTYPE_REASONS: Mapping[str, str] = {
     "error_max_turns": "hit the turn limit",
     "error_max_budget_usd": "hit the budget limit",
     "error_during_execution": "an error interrupted the run",
@@ -115,7 +118,7 @@ def main() -> None:
         help="Run inference on the next prompt of a thread.",
     )
     reply_parser.set_defaults(func=_execute_reply)
-    _add_thread_args(reply_parser, required=True)
+    _add_thread_args(reply_parser)
     _add_query_args(reply_parser)
 
     new_parser = subparsers.add_parser(
@@ -134,9 +137,9 @@ def main() -> None:
         help="Rename a thread.",
     )
     rename_parser.set_defaults(func=_execute_rename)
-    _add_thread_args(rename_parser, required=True)
+    _add_thread_args(rename_parser)
     rename_parser.add_argument(
-        "dst",
+        "destination",
         help="Destination thread name.",
     )
 
@@ -145,21 +148,21 @@ def main() -> None:
         help="Delete a thread.",
     )
     rm_parser.set_defaults(func=_execute_rm)
-    _add_thread_args(rm_parser, required=True)
+    _add_thread_args(rm_parser)
 
     undo_parser = subparsers.add_parser(
         "undo",
         help="Turn the last turn of a thread back into the staged query.",
     )
     undo_parser.set_defaults(func=_execute_undo)
-    _add_thread_args(undo_parser, required=True)
+    _add_thread_args(undo_parser)
 
     edit_prompt_parser = subparsers.add_parser(
         "edit-prompt",
         help="Edit prompt for the staged query.",
     )
     edit_prompt_parser.set_defaults(func=_execute_edit_prompt)
-    _add_thread_args(edit_prompt_parser, required=True)
+    _add_thread_args(edit_prompt_parser)
     edit_prompt_parser.add_argument(
         "-p",
         "--preset",
@@ -171,7 +174,7 @@ def main() -> None:
         help="Add attachments for the staged query.",
     )
     attach_parser.set_defaults(func=_execute_attach)
-    _add_thread_args(attach_parser, required=True)
+    _add_thread_args(attach_parser)
     attach_parser.add_argument(
         "attachments",
         nargs="+",
@@ -184,27 +187,27 @@ def main() -> None:
         help="Run inference on the staged query.",
     )
     commit_parser.set_defaults(func=_execute_commit)
-    _add_thread_args(commit_parser, required=True)
+    _add_thread_args(commit_parser)
 
     clear_parser = subparsers.add_parser(
         "clear",
         help="Clear the staged query without running inference.",
     )
     clear_parser.set_defaults(func=_execute_clear)
-    _add_thread_args(clear_parser, required=True)
+    _add_thread_args(clear_parser)
 
     ls_parser = subparsers.add_parser("ls", help="List threads.")
     ls_parser.set_defaults(func=_execute_ls)
 
     show_parser = subparsers.add_parser("show", help="Show the turns of a thread.")
     show_parser.set_defaults(func=_execute_show)
-    _add_thread_args(show_parser, required=True)
+    _add_thread_args(show_parser)
 
     status_parser = subparsers.add_parser(
         "status", help="Show the settings of a thread and its staged query."
     )
     status_parser.set_defaults(func=_execute_status)
-    _add_thread_args(status_parser, required=True)
+    _add_thread_args(status_parser)
 
     args = parser.parse_args()
 
@@ -332,7 +335,7 @@ def _execute_run(args: argparse.Namespace, env: _Environment) -> None:
 
     preset_name: str | None = args.preset
     draft = None if preset_name is None else _get_preset(preset_name, config_path)
-    attachments = [_get_attachment(a) for a in args.attachments]
+    attachments = _get_attachments(args.attachments)
     is_chat: bool = args.chat
     settings = _get_thread_settings(args, config_path)
 
@@ -361,7 +364,12 @@ def _execute_run(args: argparse.Namespace, env: _Environment) -> None:
 
     piped_stdin = None if sys.stdin.isatty() else sys.stdin.read()
     _send_turn(
-        thread, prompt, piped_stdin=piped_stdin, attachments=attachments, env=env
+        thread,
+        prompt,
+        piped_stdin=piped_stdin,
+        attachments=attachments,
+        config_path=config_path,
+        claude_projects_path=env.claude_projects_path,
     )
 
     if is_chat:
@@ -375,7 +383,7 @@ def _execute_reply(args: argparse.Namespace, env: _Environment) -> None:
 
     preset_name: str | None = args.preset
     draft = None if preset_name is None else _get_preset(preset_name, config_path)
-    attachments = [_get_attachment(a) for a in args.attachments]
+    attachments = _get_attachments(args.attachments)
     is_chat: bool = args.chat
 
     thread = _get_thread(args.thread_choice, threads_path)
@@ -394,7 +402,12 @@ def _execute_reply(args: argparse.Namespace, env: _Environment) -> None:
 
     piped_stdin = None if sys.stdin.isatty() else sys.stdin.read()
     _send_turn(
-        thread, prompt, piped_stdin=piped_stdin, attachments=attachments, env=env
+        thread,
+        prompt,
+        piped_stdin=piped_stdin,
+        attachments=attachments,
+        config_path=config_path,
+        claude_projects_path=env.claude_projects_path,
     )
 
     if is_chat:
@@ -420,15 +433,16 @@ def _execute_rename(args: argparse.Namespace, env: _Environment) -> None:
     _assert_initialized(env)
     threads_path = env.data_path / THREADS_PATHNAME
 
-    src = _get_thread(args.thread_choice, threads_path)
+    thread = _get_thread(args.thread_choice, threads_path)
+    destination: str = args.destination
 
-    _assert_thread_name_is_valid(args.dst)
+    _assert_thread_name_is_valid(destination)
 
-    dst_path = threads_path / args.dst
+    destination_path = threads_path / destination
 
-    _assert_thread_doesnt_exist(dst_path)
+    _assert_thread_doesnt_exist(destination_path)
 
-    src.path.rename(dst_path)
+    thread.path.rename(destination_path)
 
 
 def _execute_rm(args: argparse.Namespace, env: _Environment) -> None:
@@ -437,8 +451,11 @@ def _execute_rm(args: argparse.Namespace, env: _Environment) -> None:
 
     thread = _get_thread(args.thread_choice, threads_path)
 
-    for turn_idx in range(_get_turns_count(thread)):
-        _remove_turn(_Turn(thread.get_turn_path(turn_idx)))
+    # Each file is removed by name, so a file lm did not write makes rmdir fail
+    # instead of being deleted with the thread
+    turns_count = _get_turns_count(thread)
+    for turn_index in range(turns_count):
+        _remove_turn(_Turn(thread.get_turn_path(turn_index)))
 
     if thread.staged_path.exists():
         _remove_query(_Query(thread.staged_path))
@@ -468,9 +485,8 @@ def _execute_undo(args: argparse.Namespace, env: _Environment) -> None:
         sys.exit("No turns to undo.")
     _assert_no_staged_query(thread)
 
-    turn_lines_counts = [
-        int(line) for line in thread.session_lines_path.read_text().splitlines()
-    ]
+    session_lines = thread.session_lines_path.read_text()
+    turn_lines_counts = [int(line) for line in session_lines.splitlines()]
     kept_turn_lines_counts = turn_lines_counts[:-1]
     # A thread without turns has no session
     if len(kept_turn_lines_counts) == 0:
@@ -528,7 +544,7 @@ def _execute_edit_prompt(args: argparse.Namespace, env: _Environment) -> None:
     except _EmptyPromptError:
         sys.exit("Prompt is empty, exiting.")
 
-    _write_prompt(staged, prompt)
+    _write_prompt(staged.prompt_path, prompt)
 
 
 def _execute_attach(args: argparse.Namespace, env: _Environment) -> None:
@@ -536,12 +552,15 @@ def _execute_attach(args: argparse.Namespace, env: _Environment) -> None:
     threads_path = env.data_path / THREADS_PATHNAME
 
     thread = _get_thread(args.thread_choice, threads_path)
-    attachments = [_get_attachment(a) for a in args.attachments]
+    attachments = _get_attachments(args.attachments)
 
     staged = _Query(thread.staged_path)
-    staged.path.mkdir(exist_ok=True)
-
     attachments_path = staged.attachments_path
+    for attachment in attachments:
+        if (attachments_path / attachment.alias).exists():
+            sys.exit(f"Attachment already exists with alias '{attachment.alias}'")
+
+    staged.path.mkdir(exist_ok=True)
     attachments_path.mkdir(exist_ok=True)
     _write_attachments(attachments, attachments_path)
 
@@ -561,7 +580,7 @@ def _execute_commit(args: argparse.Namespace, env: _Environment) -> None:
         sys.exit("No staged prompt found.")
 
     prompt = staged.prompt_path.read_text().strip()
-    if not prompt:
+    if prompt == "":
         sys.exit("Prompt is empty, exiting.")
 
     stdin_path = staged.stdin_path
@@ -569,12 +588,13 @@ def _execute_commit(args: argparse.Namespace, env: _Environment) -> None:
 
     attachments_path = staged.attachments_path
 
+    char_delay_seconds = _get_char_delay_seconds_from_settings(config_path)
     response = _handle_turn(
         thread,
         prompt=prompt,
         piped_stdin=piped_stdin,
         attachments_path=attachments_path if attachments_path.exists() else None,
-        char_delay=_get_char_delay_from_settings(config_path),
+        char_delay_seconds=char_delay_seconds,
         claude_projects_path=env.claude_projects_path,
     )
 
@@ -600,9 +620,8 @@ def _execute_ls(_: argparse.Namespace, env: _Environment) -> None:
     threads_path = env.data_path / THREADS_PATHNAME
 
     threads = _get_threads(threads_path)
-    _write_paged(
-        "".join(f"{_format_thread_summary_line(t)}\n" for t in threads), pager=env.pager
-    )
+    summary = "".join(f"{_format_thread_summary_line(thread)}\n" for thread in threads)
+    _write_paged(summary, pager=env.pager)
 
 
 def _execute_show(args: argparse.Namespace, env: _Environment) -> None:
@@ -623,7 +642,8 @@ def _execute_status(args: argparse.Namespace, env: _Environment) -> None:
 
     thread = _get_thread(args.thread_choice, threads_path)
 
-    _write_paged(_format_status(thread), pager=env.pager)
+    status = _format_status(thread)
+    _write_paged(status, pager=env.pager)
 
 
 # --- turns
@@ -634,31 +654,33 @@ def _send_turn(
     prompt: str,
     *,
     piped_stdin: str | None,
-    attachments: list[tuple[Path, str]],
-    env: _Environment,
+    attachments: list[_Attachment],
+    config_path: Path,
+    claude_projects_path: Path,
 ) -> None:
     """Run the prompt as the next turn of the thread, and save it."""
     staged = _Query(thread.staged_path)
     staged.path.mkdir()
-    _write_prompt(staged, prompt)
+    _write_prompt(staged.prompt_path, prompt)
 
     if piped_stdin is not None:
         staged.stdin_path.write_text(piped_stdin)
 
-    if not attachments:
+    if len(attachments) == 0:
         attachments_path = None
     else:
         attachments_path = staged.attachments_path
         attachments_path.mkdir()
         _write_attachments(attachments, attachments_path)
 
+    char_delay_seconds = _get_char_delay_seconds_from_settings(config_path)
     response = _handle_turn(
         thread,
         prompt=prompt,
         piped_stdin="" if piped_stdin is None else piped_stdin,
         attachments_path=attachments_path,
-        char_delay=_get_char_delay_from_settings(env.config_path),
-        claude_projects_path=env.claude_projects_path,
+        char_delay_seconds=char_delay_seconds,
+        claude_projects_path=claude_projects_path,
     )
     _commit_staged(thread, response)
 
@@ -677,7 +699,14 @@ def _chat(thread: _Thread, env: _Environment) -> None:
         except _EmptyPromptError:
             return
 
-        _send_turn(thread, prompt, piped_stdin=None, attachments=[], env=env)
+        _send_turn(
+            thread,
+            prompt,
+            piped_stdin=None,
+            attachments=[],
+            config_path=env.config_path,
+            claude_projects_path=env.claude_projects_path,
+        )
 
 
 # --- threads
@@ -733,8 +762,8 @@ class _Thread:
     def scratch_cwd_path(self) -> Path:
         return self.claude_path / "scratch-cwd"
 
-    def get_turn_path(self, idx: int) -> Path:
-        return self.path / f"{idx:02d}"
+    def get_turn_path(self, index: int) -> Path:
+        return self.path / f"{index:02d}"
 
 
 @dataclass(frozen=True)
@@ -757,8 +786,8 @@ class _SelectedThread:
 type _ThreadChoice = _NamedThread | _LastThread | _SelectedThread
 
 
-def _add_thread_args(parser: argparse.ArgumentParser, *, required: bool) -> None:
-    group = parser.add_mutually_exclusive_group(required=required)
+def _add_thread_args(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "-t",
         "--thread",
@@ -791,7 +820,7 @@ def _get_thread(choice: _ThreadChoice, threads_path: Path) -> _Thread:
             thread_name = name
         case _LastThread():
             threads = _get_threads(threads_path)
-            if not threads:
+            if len(threads) == 0:
                 sys.exit("No threads found.")
             thread_name = threads[0].name
         case _SelectedThread():
@@ -810,7 +839,7 @@ def _get_thread(choice: _ThreadChoice, threads_path: Path) -> _Thread:
 
 def _select_thread(threads_path: Path) -> str:
     threads = _get_threads(threads_path)
-    if not threads:
+    if len(threads) == 0:
         sys.exit("No threads found.")
 
     # The summary shortens the name, so two threads can share one. The full name
@@ -835,12 +864,13 @@ def _select_thread(threads_path: Path) -> str:
 
 def _get_threads(threads_path: Path) -> list[_Thread]:
     paths = sorted(
-        (p for p in threads_path.iterdir() if p.is_dir()),
-        # NOTE: Not a super robust way to sort by last activity, but simple and works
-        key=lambda p: p.stat().st_mtime,
+        (path for path in threads_path.iterdir() if path.is_dir()),
+        # TODO: Record the time of the last activity in the thread, since the
+        # directory mtime misses changes made inside STAGED
+        key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
-    return [_Thread(p) for p in paths]
+    return [_Thread(path) for path in paths]
 
 
 @dataclass(frozen=True)
@@ -850,7 +880,7 @@ class _ThreadSettings:
     claude_model: str
     claude_effort: str
     claude_system_prompt: str
-    claude_tools: str
+    claude_tools: tuple[str, ...]
 
 
 def _get_thread_settings(
@@ -882,12 +912,15 @@ def _get_thread_settings(
         if system_prompt_name is None
         else _get_system_prompt(system_prompt_name, config_path)
     )
+    resolved_claude_model = _resolve_claude_model(claude_model, config_path)
     return _ThreadSettings(
-        claude_model=_resolve_claude_model(claude_model, config_path),
+        claude_model=resolved_claude_model,
         claude_effort=claude_effort,
         claude_system_prompt=claude_system_prompt,
-        claude_tools=",".join(
-            t for c in capabilities for t in CAPABILITY_CLAUDE_TOOLS[c]
+        claude_tools=tuple(
+            tool
+            for capability in capabilities
+            for tool in CAPABILITY_CLAUDE_TOOLS[capability]
         ),
     )
 
@@ -903,7 +936,7 @@ def _create_thread(path: Path, settings: _ThreadSettings) -> _Thread:
     _write_read_only(thread.model_path, settings.claude_model)
     _write_read_only(thread.effort_path, settings.claude_effort)
     _write_read_only(thread.system_prompt_path, settings.claude_system_prompt)
-    _write_read_only(thread.tools_path, settings.claude_tools)
+    _write_read_only(thread.tools_path, ",".join(settings.claude_tools))
 
     thread.session_lines_path.touch()
 
@@ -911,10 +944,10 @@ def _create_thread(path: Path, settings: _ThreadSettings) -> _Thread:
 
 
 def _get_turns_count(thread: _Thread) -> int:
-    idx = 0
-    while thread.get_turn_path(idx).exists():
-        idx += 1
-    return idx
+    index = 0
+    while thread.get_turn_path(index).exists():
+        index += 1
+    return index
 
 
 def _assert_thread_name_is_valid(name: str) -> None:
@@ -973,9 +1006,9 @@ class _Turn(_Exchange):
         return self.path / "response.md"
 
 
-def _write_prompt(query: _Query, prompt: str) -> None:
+def _write_prompt(prompt_path: Path, prompt: str) -> None:
     # new line at the end to be in line with response and stick to best practices
-    query.prompt_path.write_text(f"{prompt}\n")
+    prompt_path.write_text(f"{prompt}\n")
 
 
 def _commit_staged(thread: _Thread, response: str) -> None:
@@ -993,7 +1026,7 @@ def _commit_staged(thread: _Thread, response: str) -> None:
 def _remove_query(query: _Query) -> None:
     query.prompt_path.unlink(missing_ok=True)
     query.stdin_path.unlink(missing_ok=True)
-    _remove_attachments(query)
+    _remove_attachments(query.attachments_path)
     query.path.rmdir()
 
 
@@ -1002,48 +1035,57 @@ def _remove_turn(turn: _Turn) -> None:
     turn.response_path.unlink()
 
     turn.stdin_path.unlink(missing_ok=True)
-    _remove_attachments(turn)
+    _remove_attachments(turn.attachments_path)
 
     turn.path.rmdir()
 
 
-def _remove_attachments(exchange: _Exchange) -> None:
-    path = exchange.attachments_path
-    if not path.exists():
+def _remove_attachments(attachments_path: Path) -> None:
+    if not attachments_path.exists():
         return
 
-    for attachment_path in path.iterdir():
+    for attachment_path in attachments_path.iterdir():
         attachment_path.unlink()
-    path.rmdir()
+    attachments_path.rmdir()
 
 
 # --- attachments
 
 
-def _get_attachment(arg: str) -> tuple[Path, str]:
-    if ":" not in arg:
-        path = Path(arg)
-        alias = path.name
-    else:
-        path_str, alias = arg.rsplit(":", 1)
-        path = Path(path_str)
-    if not alias:
-        sys.exit(f"Attachment alias is empty: {arg}")
-    if not path.exists():
-        sys.exit(f"Attachment not found: {path}")
-    if path.is_dir():
-        sys.exit(f"Attachment is a directory: {path}")
-    if path.stat().st_size > ATTACHMENT_MAX_SIZE_BYTES:
-        sys.exit(f"Attachment too large: {path}")
-    return path, alias
+@dataclass(frozen=True)
+class _Attachment:
+    """A file attached to a query."""
+
+    source_path: Path
+    alias: str
 
 
-def _write_attachments(attachments: list[tuple[Path, str]], path: Path) -> None:
-    for source_path, alias in attachments:
-        alias_path = path / alias
-        if alias_path.exists():
-            sys.exit(f"Attachment already exists with alias '{alias}'")
-        source_path.copy(alias_path)
+def _get_attachments(args: list[str]) -> list[_Attachment]:
+    attachments: list[_Attachment] = []
+    for arg in args:
+        if ":" not in arg:
+            source_path = Path(arg)
+            alias = source_path.name
+        else:
+            source_path_str, alias = arg.rsplit(":", 1)
+            source_path = Path(source_path_str)
+        if alias == "":
+            sys.exit(f"Attachment alias is empty: {arg}")
+        if not source_path.exists():
+            sys.exit(f"Attachment not found: {source_path}")
+        if source_path.is_dir():
+            sys.exit(f"Attachment is a directory: {source_path}")
+        if source_path.stat().st_size > ATTACHMENT_MAX_SIZE_BYTES:
+            sys.exit(f"Attachment too large: {source_path}")
+        if any(attachment.alias == alias for attachment in attachments):
+            sys.exit(f"Attachment alias given twice: {alias}")
+        attachments.append(_Attachment(source_path=source_path, alias=alias))
+    return attachments
+
+
+def _write_attachments(attachments: list[_Attachment], attachments_path: Path) -> None:
+    for attachment in attachments:
+        attachment.source_path.copy(attachments_path / attachment.alias)
 
 
 # --- prompts and history
@@ -1063,7 +1105,7 @@ class _EmptyPromptError(Exception):
 
 
 def _edit_prompt(
-    path: Path,
+    editmsg_path: Path,
     *,
     history: list[_HistoryEntry],
     draft: str | None,
@@ -1071,7 +1113,7 @@ def _edit_prompt(
     tty_path: Path,
 ) -> str:
     editor_command = shlex.split(editor)
-    if not editor_command:
+    if len(editor_command) == 0:
         sys.exit("Editor is empty.")
 
     editor_name = Path(editor_command[0]).name
@@ -1098,7 +1140,7 @@ def _edit_prompt(
 
     components.extend(_format_history(history))
 
-    if components:
+    if len(components) > 0:
         components.append(scissors_line_component)
 
     if draft is not None:
@@ -1110,13 +1152,13 @@ def _edit_prompt(
     if not prompt_is_last:
         components.reverse()
 
-    path.write_text("\n\n".join(components))
+    editmsg_path.write_text("\n\n".join(components))
 
     # lm's own stdin and stdout may be pipes (`cat foo | lm run | less`), and the
     # editor needs the terminal
     with tty_path.open("r") as tty_in, tty_path.open("w") as tty_out:
         process_result = subprocess.run(  # noqa: S603  (running the user editor expected to be safe)
-            [*editor_command, str(path)],
+            [*editor_command, str(editmsg_path)],
             check=False,
             stdin=tty_in,
             stdout=tty_out,
@@ -1126,8 +1168,8 @@ def _edit_prompt(
     if process_result.returncode != 0:
         sys.exit("Editor exited with an error.")
 
-    editmsg_fragments = path.read_text().split(f"\n{SCISSORS_LINE}\n")
-    path.unlink()
+    editmsg_fragments = editmsg_path.read_text().split(f"\n{SCISSORS_LINE}\n")
+    editmsg_path.unlink()
 
     prompt_fragment = editmsg_fragments[-1] if prompt_is_last else editmsg_fragments[0]
     prompt = prompt_fragment.strip()
@@ -1140,11 +1182,11 @@ def _edit_prompt(
 
 def _format_history(history: list[_HistoryEntry]) -> list[str]:
     components: list[str] = []
-    for idx, entry in enumerate(history):
-        prompt_component = f"<!-- Prompt {idx + 1} -->\n\n{entry.prompt}"
+    for index, entry in enumerate(history):
+        prompt_component = f"<!-- Prompt {index + 1} -->\n\n{entry.prompt}"
         if len(entry.attachment_names) > 0:
             prompt_component += f"\nAttachments: {', '.join(entry.attachment_names)}"
-        response_component = f"<!-- Answer {idx + 1} -->\n\n{entry.response}"
+        response_component = f"<!-- Answer {index + 1} -->\n\n{entry.response}"
 
         components.append(prompt_component)
         components.append(response_component)
@@ -1153,18 +1195,19 @@ def _format_history(history: list[_HistoryEntry]) -> list[str]:
 
 def _build_history(thread: _Thread) -> list[_HistoryEntry]:
     entries: list[_HistoryEntry] = []
-    for idx in range(_get_turns_count(thread)):
-        turn = _Turn(thread.get_turn_path(idx))
+    turns_count = _get_turns_count(thread)
+    for index in range(turns_count):
+        turn = _Turn(thread.get_turn_path(index))
         attachments_path = turn.attachments_path
         if attachments_path.exists():
-            attachment_names = tuple(p.name for p in attachments_path.iterdir())
+            attachment_names = tuple(path.name for path in attachments_path.iterdir())
         else:
             attachment_names = ()
+        prompt = turn.prompt_path.read_text()
+        response = turn.response_path.read_text()
         entries.append(
             _HistoryEntry(
-                prompt=turn.prompt_path.read_text(),
-                attachment_names=attachment_names,
-                response=turn.response_path.read_text(),
+                prompt=prompt, attachment_names=attachment_names, response=response
             )
         )
     return entries
@@ -1179,10 +1222,13 @@ def _handle_turn(
     prompt: str,
     piped_stdin: str,
     attachments_path: Path | None,
-    char_delay: float,
+    char_delay_seconds: float,
     claude_projects_path: Path,
 ) -> str:
     prompt_summary = _summarize_text(prompt, max_length=PROMPT_SUMMARY_MAX_LENGTH)
+    claude_model = thread.model_path.read_text()
+    claude_effort = thread.effort_path.read_text()
+    claude_system_prompt = thread.system_prompt_path.read_text()
     claude_tools = thread.tools_path.read_text()
 
     with _ClaudeContext.create(
@@ -1191,22 +1237,22 @@ def _handle_turn(
         thread_session_lines_path=thread.session_lines_path,
         scratch_cwd_path=thread.scratch_cwd_path,
         attachments_path=attachments_path,
-    ) as (claude_session_args, claude_attachments_prompt):
+    ) as references:
         claude_prompt = (
             prompt
-            if claude_attachments_prompt is None
-            else f"{prompt}\n\n{claude_attachments_prompt}"
+            if references.attachments_prompt is None
+            else f"{prompt}\n\n{references.attachments_prompt}"
         )
 
         command = [
             "claude",
             "--model",
-            thread.model_path.read_text(),
+            claude_model,
             "--effort",
-            thread.effort_path.read_text(),
+            claude_effort,
             "--system-prompt",
-            thread.system_prompt_path.read_text(),
-            *claude_session_args,
+            claude_system_prompt,
+            *references.session_args,
             # Non-interactive: one turn, then exit
             "--print",
             # Keeps user config out but still logs in with the subscription;
@@ -1224,6 +1270,7 @@ def _handle_turn(
             "--include-partial-messages",
             "--output-format",
             "stream-json",
+            # claude refuses stream-json in print mode without it
             "--verbose",
             # A prompt starting with a hyphen would otherwise be read as an option
             "--",
@@ -1255,63 +1302,61 @@ def _handle_turn(
             sys.stderr.flush()
 
             return _read_response(
-                process, thread_name=thread.name, char_delay=char_delay
+                process, thread_name=thread.name, char_delay_seconds=char_delay_seconds
             )
 
 
 def _read_response(
-    process: subprocess.Popen[str], *, thread_name: str, char_delay: float
+    process: subprocess.Popen[str], *, thread_name: str, char_delay_seconds: float
 ) -> str:
     if process.stdout is None:
         sys.exit("Unexpected error: Claude standard output not captured")
 
-    stream = _ResponseStream(char_delay=char_delay)
+    stream = _ResponseStream(char_delay_seconds=char_delay_seconds)
     for line in process.stdout:
         event = json.loads(line)
 
-        # The result event ends the run, and its is_error says whether the turn
-        # succeeded.
-        # Ref: https://code.claude.com/docs/en/agent-sdk/typescript#sdkresultmessage
-        if event["type"] == "result":
-            if event.get("is_error") is True:
-                sys.exit(
-                    _format_inference_failure(
-                        detail=_get_failure_detail(
-                            errors=event.get("errors", []),
-                            error_subtype=event.get("subtype"),
-                        ),
-                        thread_name=thread_name,
+        match event["type"]:
+            # The result event ends the run, and its is_error says whether the
+            # turn succeeded.
+            # Ref: https://code.claude.com/docs/en/agent-sdk/typescript#sdkresultmessage
+            case "result":
+                if event.get("is_error") is True:
+                    detail = _get_failure_detail(
+                        errors=event.get("errors", []),
+                        error_subtype=event.get("subtype"),
                     )
-                )
-            stream.end()
-            return stream.get_text()
-
-        # Claude summarizes the history once it grows too long. The turns on
-        # disk still hold every exchange, but it stops sending them all.
-        if event["type"] == "system" and event.get("subtype") == "compact_boundary":
-            pre_tokens = event["compact_metadata"]["pre_tokens"]
-            stream.write_notice(f"Compacted session at {pre_tokens} tokens")
-            continue
-
-        # Claude reports each block of a message once it is whole, so a complete
-        # tool call arrives in one piece.
-        if event["type"] == "assistant":
-            for content_block in event["message"]["content"]:
-                if content_block["type"] == "tool_use":
-                    call = _format_tool_call(
-                        content_block["name"], content_block["input"]
+                    sys.exit(
+                        _format_inference_failure(
+                            detail=detail, thread_name=thread_name
+                        )
                     )
-                    stream.write_tool_call(call)
-            continue
-
-        if event["type"] != "stream_event":
-            continue
-        if event["event"]["type"] != "content_block_delta":
-            continue
-        if event["event"]["delta"]["type"] != "text_delta":
-            continue
-
-        stream.write_text(event["event"]["delta"]["text"])
+                stream.end()
+                return stream.get_text()
+            # Claude summarizes the history once it grows too long. The turns on
+            # disk still hold every exchange, but it stops sending them all.
+            case "system" if event.get("subtype") == "compact_boundary":
+                pre_tokens = event["compact_metadata"]["pre_tokens"]
+                stream.write_notice(f"Compacted session at {pre_tokens} tokens")
+            # Claude reports each block of a message once it is whole, so a
+            # complete tool call arrives in one piece.
+            case "assistant":
+                for content_block in event["message"]["content"]:
+                    if content_block["type"] == "tool_use":
+                        call = _format_tool_call(
+                            content_block["name"], content_block["input"]
+                        )
+                        stream.write_tool_call(call)
+            case "stream_event":
+                stream_event = event["event"]
+                if (
+                    stream_event["type"] == "content_block_delta"
+                    and stream_event["delta"]["type"] == "text_delta"
+                ):
+                    stream.write_text(stream_event["delta"]["text"])
+            # Claude streams more kinds of events than a turn needs
+            case _:
+                pass
 
     # Every result event returns or exits, so the stream ended without one.
     process.wait()
@@ -1354,8 +1399,8 @@ def _format_tool_call(name: str, arguments: dict[str, object]) -> str:
 class _ResponseStream:
     """The response as it arrives, written out one paragraph at a time."""
 
-    def __init__(self, char_delay: float) -> None:
-        self._char_delay = char_delay
+    def __init__(self, char_delay_seconds: float) -> None:
+        self._char_delay_seconds = char_delay_seconds
         self._chunks: list[str] = []
         self._is_paragraph_closed = False
 
@@ -1391,7 +1436,7 @@ class _ResponseStream:
     def _write(self, text: str) -> None:
         self._chunks.append(text)
 
-        if self._char_delay == 0.0:
+        if self._char_delay_seconds == 0.0:
             sys.stdout.write(text)
             sys.stdout.flush()
             return
@@ -1399,7 +1444,15 @@ class _ResponseStream:
         for char in text:
             sys.stdout.write(char)
             sys.stdout.flush()
-            time.sleep(self._char_delay)
+            time.sleep(self._char_delay_seconds)
+
+
+@dataclass(frozen=True)
+class _ClaudeReferences:
+    """What claude needs to find the context of a turn."""
+
+    session_args: tuple[str, ...]
+    attachments_prompt: str | None
 
 
 class _ClaudeContext:
@@ -1435,9 +1488,8 @@ class _ClaudeContext:
         project_path = projects_path / escaped_cwd
         id_ = str(uuid.uuid4())
         claude_session_path = project_path / f"{id_}.jsonl"
-        turn_lines_counts = tuple(
-            int(line) for line in thread_session_lines_path.read_text().splitlines()
-        )
+        session_lines = thread_session_lines_path.read_text()
+        turn_lines_counts = tuple(int(line) for line in session_lines.splitlines())
         return _ClaudeContext(
             id_,
             thread_session_path,
@@ -1448,7 +1500,7 @@ class _ClaudeContext:
             attachments_path,
         )
 
-    def __enter__(self) -> tuple[tuple[str, str], str | None]:
+    def __enter__(self) -> _ClaudeReferences:
         self._projects_path.mkdir(parents=True, exist_ok=True)
         self._project_path.mkdir()
 
@@ -1462,23 +1514,26 @@ class _ClaudeContext:
             attachments_prompt = None
         else:
             attachments_prompt_lines = ["Attached files:"]
-            for src in self._attachments_path.iterdir():
-                dst = self._scratch_cwd_path / src.name
-                dst.symlink_to(
-                    src.resolve().relative_to(
+            for source_path in self._attachments_path.iterdir():
+                link_path = self._scratch_cwd_path / source_path.name
+                link_path.symlink_to(
+                    source_path.resolve().relative_to(
                         self._scratch_cwd_path.resolve(), walk_up=True
                     )
                 )
-                attachments_prompt_lines.append(f"- @{dst.name}")
+                attachments_prompt_lines.append(f"- @{link_path.name}")
             attachments_prompt = "\n".join(attachments_prompt_lines)
 
-        return (flag, self._session_id), attachments_prompt
+        return _ClaudeReferences(
+            session_args=(flag, self._session_id),
+            attachments_prompt=attachments_prompt,
+        )
 
     def __exit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
     ) -> None:
         if self._claude_session_path.is_symlink():
             self._claude_session_path.unlink()
@@ -1490,7 +1545,7 @@ class _ClaudeContext:
         for path in self._scratch_cwd_path.iterdir():
             path.unlink()
 
-        if exc_type is None:
+        if exception_type is None:
             lines_count = self._thread_session_path.read_text().count("\n")
             added_lines_count = lines_count - sum(self._turn_lines_counts)
             with self._thread_session_lines_path.open("a") as file:
@@ -1526,16 +1581,18 @@ def _write_paged(content: str, *, pager: str) -> None:
         return
 
     pager_env = os.environ.copy()
+    # A short output prints and exits like cat does, and stays on screen after
+    # less quits: --quit-if-one-screen --RAW-CONTROL-CHARS --no-init
     pager_env.setdefault("LESS", "-FRX")
     with subprocess.Popen(  # noqa: S603  (running the user pager expected to be safe)
         pager,
         stdin=subprocess.PIPE,
         text=True,
         env=pager_env,
-    ) as pager_proc:
-        if pager_proc.stdin is None:
+    ) as pager_process:
+        if pager_process.stdin is None:
             sys.exit("Unexpected error: Pager standard input not captured")
-        pager_proc.stdin.write(content)
+        pager_process.stdin.write(content)
 
 
 def _format_thread_summary_line(thread: _Thread) -> str:
@@ -1563,14 +1620,17 @@ def _format_status(thread: _Thread) -> str:
     )
     claude_tools = thread.tools_path.read_text()
     tools = "none" if claude_tools == "" else ", ".join(claude_tools.split(","))
+    model = thread.model_path.read_text()
+    effort = thread.effort_path.read_text()
+    turns_count = _get_turns_count(thread)
 
     lines = [
         f"{'Thread:':<{STATUS_LABEL_WIDTH}}{thread.name}",
-        f"{'Model:':<{STATUS_LABEL_WIDTH}}{thread.model_path.read_text()}",
-        f"{'Effort:':<{STATUS_LABEL_WIDTH}}{thread.effort_path.read_text()}",
+        f"{'Model:':<{STATUS_LABEL_WIDTH}}{model}",
+        f"{'Effort:':<{STATUS_LABEL_WIDTH}}{effort}",
         f"{'System:':<{STATUS_LABEL_WIDTH}}{system_prompt}",
         f"{'Tools:':<{STATUS_LABEL_WIDTH}}{tools}",
-        f"{'Turns:':<{STATUS_LABEL_WIDTH}}{_get_turns_count(thread)}",
+        f"{'Turns:':<{STATUS_LABEL_WIDTH}}{turns_count}",
         "",
     ]
 
@@ -1611,7 +1671,7 @@ def _format_staged(staged: _Query) -> list[str]:
 
     attachments_path = staged.attachments_path
     if attachments_path.exists():
-        names = sorted(p.name for p in attachments_path.iterdir())
+        names = sorted(path.name for path in attachments_path.iterdir())
         lines.append(
             f"  {'attachments':<{STATUS_STAGED_LABEL_WIDTH}}{', '.join(names)}"
         )
@@ -1670,17 +1730,17 @@ def _get_system_prompt(name: str, config_path: Path) -> str:
     return path.read_text()
 
 
-def _get_char_delay_from_settings(config_path: Path) -> float:
+def _get_char_delay_seconds_from_settings(config_path: Path) -> float:
     settings_path = config_path / SETTINGS_PATHNAME
     settings = tomllib.loads(settings_path.read_text())
     output = settings.get(SETTINGS_OUTPUT_KEY, {})
     if not isinstance(output, dict):
         sys.exit(f"Setting {SETTINGS_OUTPUT_KEY} must be a table: {output}")
     key = f"{SETTINGS_OUTPUT_KEY}.{SETTINGS_OUTPUT_CHAR_DELAY_KEY}"
-    char_delay = output.get(SETTINGS_OUTPUT_CHAR_DELAY_KEY, 0.0)
-    if not isinstance(char_delay, float):
-        sys.exit(f"Setting {key} must be a float: {char_delay}")
-    return char_delay
+    char_delay_seconds = output.get(SETTINGS_OUTPUT_CHAR_DELAY_KEY, 0.0)
+    if not isinstance(char_delay_seconds, float):
+        sys.exit(f"Setting {key} must be a float: {char_delay_seconds}")
+    return char_delay_seconds
 
 
 def _get_default_from_settings(key: str, fallback: str, config_path: Path) -> str:
@@ -1710,9 +1770,9 @@ def _resolve_claude_model(model: str, config_path: Path) -> str:
 
 
 def _write_read_only(path: Path, content: str) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
-    with os.fdopen(fd, "w") as f:
-        f.write(content)
+    file_descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
+    with os.fdopen(file_descriptor, "w") as file:
+        file.write(content)
 
 
 # --- entrypoint
