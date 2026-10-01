@@ -754,6 +754,25 @@ def test_an_unknown_default_effort_is_rejected(lm: Lm) -> None:
     assert "Unknown Claude effort: huge" in result.stderr
 
 
+def test_a_bad_output_setting_is_rejected_before_any_turn(lm: Lm) -> None:
+    lm.set_settings('[output]\nchar_delay = "fast"\n')
+
+    result = lm.invoke("new", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "Setting output.char_delay must be a float: fast" in result.stderr
+    assert not lm.get_thread_path("demo").exists()
+
+
+def test_a_bad_model_alias_is_rejected_even_if_unused(lm: Lm) -> None:
+    lm.set_settings("[models]\nfast = 3\n")
+
+    result = lm.invoke("new", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "Model alias fast must be a string: 3" in result.stderr
+
+
 def test_thread_effort_reaches_claude(lm: Lm) -> None:
     lm.set_editor_prompt("hello\n")
     lm.set_claude_result_success("hi")

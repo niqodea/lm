@@ -337,7 +337,8 @@ def _execute_run(args: argparse.Namespace, env: _Environment) -> None:
     draft = None if preset_name is None else _get_preset(preset_name, config_path)
     attachments = _get_attachments(args.attachments)
     is_chat: bool = args.chat
-    settings = _get_thread_settings(args, config_path)
+    settings = _get_settings(config_path)
+    thread_settings = _get_thread_settings(args, settings, config_path)
 
     arg_name: str | None = args.name
     name = env.started_at.strftime("%Y%m%d-%H%M%S") if arg_name is None else arg_name
@@ -360,7 +361,7 @@ def _execute_run(args: argparse.Namespace, env: _Environment) -> None:
         sys.exit("Prompt is empty, exiting.")
 
     sys.stderr.write(f"Creating new thread: {name}\n")
-    thread = _create_thread(path, settings)
+    thread = _create_thread(path, thread_settings)
 
     piped_stdin = None if sys.stdin.isatty() else sys.stdin.read()
     _send_turn(
@@ -368,12 +369,12 @@ def _execute_run(args: argparse.Namespace, env: _Environment) -> None:
         prompt,
         piped_stdin=piped_stdin,
         attachments=attachments,
-        config_path=config_path,
+        char_delay_seconds=settings.char_delay_seconds,
         claude_projects_path=env.claude_projects_path,
     )
 
     if is_chat:
-        _chat(thread, env)
+        _chat(thread, env, char_delay_seconds=settings.char_delay_seconds)
 
 
 def _execute_reply(args: argparse.Namespace, env: _Environment) -> None:
@@ -385,6 +386,7 @@ def _execute_reply(args: argparse.Namespace, env: _Environment) -> None:
     draft = None if preset_name is None else _get_preset(preset_name, config_path)
     attachments = _get_attachments(args.attachments)
     is_chat: bool = args.chat
+    settings = _get_settings(config_path)
 
     thread = _get_thread(args.thread_choice, threads_path)
     _assert_no_staged_query(thread)
@@ -406,12 +408,12 @@ def _execute_reply(args: argparse.Namespace, env: _Environment) -> None:
         prompt,
         piped_stdin=piped_stdin,
         attachments=attachments,
-        config_path=config_path,
+        char_delay_seconds=settings.char_delay_seconds,
         claude_projects_path=env.claude_projects_path,
     )
 
     if is_chat:
-        _chat(thread, env)
+        _chat(thread, env, char_delay_seconds=settings.char_delay_seconds)
 
 
 def _execute_new(args: argparse.Namespace, env: _Environment) -> None:
@@ -419,14 +421,15 @@ def _execute_new(args: argparse.Namespace, env: _Environment) -> None:
     threads_path = env.data_path / THREADS_PATHNAME
 
     name: str = args.name
-    settings = _get_thread_settings(args, env.config_path)
+    settings = _get_settings(env.config_path)
+    thread_settings = _get_thread_settings(args, settings, env.config_path)
 
     _assert_thread_name_is_valid(name)
 
     path = threads_path / name
     _assert_thread_doesnt_exist(path)
 
-    _create_thread(path, settings)
+    _create_thread(path, thread_settings)
 
 
 def _execute_rename(args: argparse.Namespace, env: _Environment) -> None:
@@ -570,6 +573,7 @@ def _execute_commit(args: argparse.Namespace, env: _Environment) -> None:
     config_path = env.config_path
     threads_path = env.data_path / THREADS_PATHNAME
 
+    settings = _get_settings(config_path)
     thread = _get_thread(args.thread_choice, threads_path)
 
     staged = _Query(thread.staged_path)
@@ -588,13 +592,12 @@ def _execute_commit(args: argparse.Namespace, env: _Environment) -> None:
 
     attachments_path = staged.attachments_path
 
-    char_delay_seconds = _get_char_delay_seconds_from_settings(config_path)
     response = _handle_turn(
         thread,
         prompt=prompt,
         piped_stdin=piped_stdin,
         attachments_path=attachments_path if attachments_path.exists() else None,
-        char_delay_seconds=char_delay_seconds,
+        char_delay_seconds=settings.char_delay_seconds,
         claude_projects_path=env.claude_projects_path,
     )
 
@@ -655,7 +658,7 @@ def _send_turn(
     *,
     piped_stdin: str | None,
     attachments: list[_Attachment],
-    config_path: Path,
+    char_delay_seconds: float,
     claude_projects_path: Path,
 ) -> None:
     """Run the prompt as the next turn of the thread, and save it."""
@@ -673,7 +676,6 @@ def _send_turn(
         attachments_path.mkdir()
         _write_attachments(attachments, attachments_path)
 
-    char_delay_seconds = _get_char_delay_seconds_from_settings(config_path)
     response = _handle_turn(
         thread,
         prompt=prompt,
@@ -685,7 +687,7 @@ def _send_turn(
     _commit_staged(thread, response)
 
 
-def _chat(thread: _Thread, env: _Environment) -> None:
+def _chat(thread: _Thread, env: _Environment, *, char_delay_seconds: float) -> None:
     """Keep prompting for the next turn of the thread until a prompt is empty."""
     while True:
         try:
@@ -704,7 +706,7 @@ def _chat(thread: _Thread, env: _Environment) -> None:
             prompt,
             piped_stdin=None,
             attachments=[],
-            config_path=env.config_path,
+            char_delay_seconds=char_delay_seconds,
             claude_projects_path=env.claude_projects_path,
         )
 
@@ -884,37 +886,27 @@ class _ThreadSettings:
 
 
 def _get_thread_settings(
-    args: argparse.Namespace, config_path: Path
+    args: argparse.Namespace, settings: _Settings, config_path: Path
 ) -> _ThreadSettings:
     capabilities: list[str] = args.capabilities
     claude_model_arg: str | None = args.claude_model
     claude_effort_arg: str | None = args.claude_effort
     system_prompt_name: str | None = args.system_prompt
     claude_model = (
-        _get_default_from_settings(
-            SETTINGS_DEFAULT_MODEL_KEY, DEFAULT_CLAUDE_MODEL, config_path
-        )
-        if claude_model_arg is None
-        else claude_model_arg
+        settings.default_claude_model if claude_model_arg is None else claude_model_arg
     )
     claude_effort = (
-        _get_default_from_settings(
-            SETTINGS_DEFAULT_EFFORT_KEY, DEFAULT_CLAUDE_EFFORT, config_path
-        )
+        settings.default_claude_effort
         if claude_effort_arg is None
         else claude_effort_arg
     )
-    # The flag checks an effort it is given, but not one from the settings
-    if claude_effort not in CLAUDE_EFFORTS:
-        sys.exit(f"Unknown Claude effort: {claude_effort}")
     claude_system_prompt = (
         _get_default_system_prompt(config_path)
         if system_prompt_name is None
         else _get_system_prompt(system_prompt_name, config_path)
     )
-    resolved_claude_model = _resolve_claude_model(claude_model, config_path)
     return _ThreadSettings(
-        claude_model=resolved_claude_model,
+        claude_model=settings.claude_model_aliases.get(claude_model, claude_model),
         claude_effort=claude_effort,
         claude_system_prompt=claude_system_prompt,
         claude_tools=tuple(
@@ -1730,43 +1722,61 @@ def _get_system_prompt(name: str, config_path: Path) -> str:
     return path.read_text()
 
 
-def _get_char_delay_seconds_from_settings(config_path: Path) -> float:
+@dataclass(frozen=True)
+class _Settings:
+    """The user's settings for lm."""
+
+    char_delay_seconds: float
+    default_claude_model: str
+    default_claude_effort: str
+    claude_model_aliases: Mapping[str, str]
+
+
+def _get_settings(config_path: Path) -> _Settings:
     settings_path = config_path / SETTINGS_PATHNAME
     settings = tomllib.loads(settings_path.read_text())
+
     output = settings.get(SETTINGS_OUTPUT_KEY, {})
     if not isinstance(output, dict):
         sys.exit(f"Setting {SETTINGS_OUTPUT_KEY} must be a table: {output}")
-    key = f"{SETTINGS_OUTPUT_KEY}.{SETTINGS_OUTPUT_CHAR_DELAY_KEY}"
+    char_delay_key = f"{SETTINGS_OUTPUT_KEY}.{SETTINGS_OUTPUT_CHAR_DELAY_KEY}"
     char_delay_seconds = output.get(SETTINGS_OUTPUT_CHAR_DELAY_KEY, 0.0)
     if not isinstance(char_delay_seconds, float):
-        sys.exit(f"Setting {key} must be a float: {char_delay_seconds}")
-    return char_delay_seconds
+        sys.exit(f"Setting {char_delay_key} must be a float: {char_delay_seconds}")
 
-
-def _get_default_from_settings(key: str, fallback: str, config_path: Path) -> str:
-    settings_path = config_path / SETTINGS_PATHNAME
-    settings = tomllib.loads(settings_path.read_text())
     defaults = settings.get(SETTINGS_DEFAULTS_KEY, {})
     if not isinstance(defaults, dict):
         sys.exit(f"Setting {SETTINGS_DEFAULTS_KEY} must be a table: {defaults}")
-    value = defaults.get(key, fallback)
-    if not isinstance(value, str):
-        sys.exit(f"Setting {SETTINGS_DEFAULTS_KEY}.{key} must be a string: {value}")
-    return value
+    model_key = f"{SETTINGS_DEFAULTS_KEY}.{SETTINGS_DEFAULT_MODEL_KEY}"
+    default_claude_model = defaults.get(
+        SETTINGS_DEFAULT_MODEL_KEY, DEFAULT_CLAUDE_MODEL
+    )
+    if not isinstance(default_claude_model, str):
+        sys.exit(f"Setting {model_key} must be a string: {default_claude_model}")
+    effort_key = f"{SETTINGS_DEFAULTS_KEY}.{SETTINGS_DEFAULT_EFFORT_KEY}"
+    default_claude_effort = defaults.get(
+        SETTINGS_DEFAULT_EFFORT_KEY, DEFAULT_CLAUDE_EFFORT
+    )
+    if not isinstance(default_claude_effort, str):
+        sys.exit(f"Setting {effort_key} must be a string: {default_claude_effort}")
+    if default_claude_effort not in CLAUDE_EFFORTS:
+        sys.exit(f"Unknown Claude effort: {default_claude_effort}")
 
+    models = settings.get(SETTINGS_MODELS_KEY, {})
+    if not isinstance(models, dict):
+        sys.exit(f"Setting {SETTINGS_MODELS_KEY} must be a table: {models}")
+    claude_model_aliases: dict[str, str] = {}
+    for alias, model in models.items():
+        if not isinstance(model, str):
+            sys.exit(f"Model alias {alias} must be a string: {model}")
+        claude_model_aliases[alias] = model
 
-def _resolve_claude_model(model: str, config_path: Path) -> str:
-    settings_path = config_path / SETTINGS_PATHNAME
-    settings = tomllib.loads(settings_path.read_text())
-    aliases = settings.get(SETTINGS_MODELS_KEY, {})
-    if not isinstance(aliases, dict):
-        sys.exit(f"Setting {SETTINGS_MODELS_KEY} must be a table: {aliases}")
-    if model not in aliases:
-        return model
-    aliased = aliases[model]
-    if not isinstance(aliased, str):
-        sys.exit(f"Model alias {model} must be a string: {aliased}")
-    return aliased
+    return _Settings(
+        char_delay_seconds=char_delay_seconds,
+        default_claude_model=default_claude_model,
+        default_claude_effort=default_claude_effort,
+        claude_model_aliases=claude_model_aliases,
+    )
 
 
 def _write_read_only(path: Path, content: str) -> None:
