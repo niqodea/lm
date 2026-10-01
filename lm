@@ -488,19 +488,10 @@ def _execute_undo(args: argparse.Namespace, env: _Environment) -> None:
         sys.exit("No turns to undo.")
     _assert_no_staged_query(thread)
 
-    session_lines = thread.session_lines_path.read_text()
-    turn_lines_counts = [int(line) for line in session_lines.splitlines()]
+    turn_lines_counts = _get_turn_lines_counts(thread.session_lines_path)
     kept_turn_lines_counts = turn_lines_counts[:-1]
-    # A thread without turns has no session
-    if len(kept_turn_lines_counts) == 0:
-        thread.session_path.unlink()
-    else:
-        lines = thread.session_path.read_text().split("\n")
-        kept_lines = lines[: sum(kept_turn_lines_counts)]
-        thread.session_path.write_text("\n".join(kept_lines) + "\n")
-    thread.session_lines_path.write_text(
-        "".join(f"{count}\n" for count in kept_turn_lines_counts)
-    )
+    _truncate_session(thread.session_path, kept_turn_lines_counts)
+    _write_turn_lines_counts(thread.session_lines_path, kept_turn_lines_counts)
 
     turn = _Turn(thread.get_turn_path(turns_count - 1))
     turn.response_path.unlink()
@@ -940,6 +931,33 @@ def _get_turns_count(thread: _Thread) -> int:
     while thread.get_turn_path(index).exists():
         index += 1
     return index
+
+
+def _get_turn_lines_counts(session_lines_path: Path) -> tuple[int, ...]:
+    session_lines = session_lines_path.read_text()
+    return tuple(int(line) for line in session_lines.splitlines())
+
+
+def _write_turn_lines_counts(
+    session_lines_path: Path, turn_lines_counts: tuple[int, ...]
+) -> None:
+    session_lines_path.write_text("".join(f"{count}\n" for count in turn_lines_counts))
+
+
+def _truncate_session(session_path: Path, turn_lines_counts: tuple[int, ...]) -> None:
+    """Keep only the lines of the session that these turns wrote."""
+    # A thread without turns has no session, and claude can fail before it
+    # writes the session file at all
+    if len(turn_lines_counts) == 0:
+        session_path.unlink(missing_ok=True)
+        return
+
+    # 2.1.283 only appends to the session file, which we observed but the docs
+    # do not say, so the first lines are the ones the earlier turns wrote.
+    # Ref: https://code.claude.com/docs/en/sessions#where-transcripts-are-stored
+    lines = session_path.read_text().split("\n")
+    kept_lines = lines[: sum(turn_lines_counts)]
+    session_path.write_text("\n".join(kept_lines) + "\n")
 
 
 def _assert_thread_name_is_valid(name: str) -> None:
@@ -1480,8 +1498,7 @@ class _ClaudeContext:
         project_path = projects_path / escaped_cwd
         id_ = str(uuid.uuid4())
         claude_session_path = project_path / f"{id_}.jsonl"
-        session_lines = thread_session_lines_path.read_text()
-        turn_lines_counts = tuple(int(line) for line in session_lines.splitlines())
+        turn_lines_counts = _get_turn_lines_counts(thread_session_lines_path)
         return _ClaudeContext(
             id_,
             thread_session_path,
@@ -1540,20 +1557,13 @@ class _ClaudeContext:
         if exception_type is None:
             lines_count = self._thread_session_path.read_text().count("\n")
             added_lines_count = lines_count - sum(self._turn_lines_counts)
-            with self._thread_session_lines_path.open("a") as file:
-                file.write(f"{added_lines_count}\n")
-        elif len(self._turn_lines_counts) == 0:
-            # Claude can fail before it writes the session file at all
-            self._thread_session_path.unlink(missing_ok=True)
+            _write_turn_lines_counts(
+                self._thread_session_lines_path,
+                (*self._turn_lines_counts, added_lines_count),
+            )
         else:
-            # Revert the changes made by claude to the session file, otherwise
-            # the retry would send the failed prompt a second time.
-            # 2.1.283 only appends to the session file, which we observed but the
-            # docs do not say.
-            # Ref: https://code.claude.com/docs/en/sessions#where-transcripts-are-stored
-            lines = self._thread_session_path.read_text().split("\n")
-            kept_lines = lines[: sum(self._turn_lines_counts)]
-            self._thread_session_path.write_text("\n".join(kept_lines) + "\n")
+            # Otherwise the retry would send the failed prompt a second time
+            _truncate_session(self._thread_session_path, self._turn_lines_counts)
 
     @property
     def _project_path(self) -> Path:
