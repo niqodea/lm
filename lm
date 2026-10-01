@@ -1082,6 +1082,9 @@ def _get_attachments(args: list[str]) -> list[_Attachment]:
             source_path = Path(source_path_str)
         if alias == "":
             sys.exit(f"Attachment alias is empty: {arg}")
+        # The alias names a file inside the attachments directory
+        if alias in {".", ".."} or "/" in alias:
+            sys.exit(f"Attachment alias is not a file name: {alias}")
         if not source_path.exists():
             sys.exit(f"Attachment not found: {source_path}")
         if source_path.is_dir():

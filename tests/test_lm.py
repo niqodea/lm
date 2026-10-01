@@ -1049,6 +1049,23 @@ def test_an_unknown_system_prompt_is_rejected(lm: Lm) -> None:
     assert not lm.get_thread_path("demo").exists()
 
 
+def test_an_alias_that_leaves_the_attachments_is_rejected(
+    lm: Lm, tmp_path: Path
+) -> None:
+    lm.set_editor_prompt("read this\n")
+    attachment_path = tmp_path / "notes.md"
+    attachment_path.write_text("ATTACHED TEXT")
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke(
+        "reply", "--thread", "demo", "--attach", f"{attachment_path}:../x", stdin=""
+    )
+
+    assert result.returncode != 0
+    assert "Attachment alias is not a file name: ../x" in result.stderr
+    assert list(lm.get_thread_path("demo").rglob("x")) == []
+
+
 def test_run_refuses_two_attachments_with_one_alias(lm: Lm, tmp_path: Path) -> None:
     lm.set_editor_prompt("read these\n")
     (tmp_path / "a").mkdir()
