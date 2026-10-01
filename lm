@@ -1410,7 +1410,11 @@ class _ClaudeOutput:
 
     @staticmethod
     def parse_line(line: str) -> tuple[_ClaudeOutput.Event, ...]:
-        event = json.loads(line)
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as error:
+            message = f"claude sent a line that is not JSON: {line.strip()}"
+            raise _ClaudeOutput.UnreadableEventError(message) from error
         match event:
             # The result event ends the run, and its is_error says whether the
             # turn succeeded.

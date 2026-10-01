@@ -15,7 +15,7 @@ from protocol import (
     CLAUDE_STDIN_ENV,
     ClaudeCompaction,
     ClaudeError,
-    ClaudeRawEvent,
+    ClaudeRawLine,
     ClaudeScript,
     ClaudeSuccess,
     ClaudeText,
@@ -59,8 +59,9 @@ def main() -> None:
                 _write_tool_call_event(name, arguments)
             case ClaudeCompaction(pre_tokens=pre_tokens):
                 _write_compaction_event(pre_tokens)
-            case ClaudeRawEvent(event=raw_event):
-                _write_event(raw_event)
+            case ClaudeRawLine(line=line):
+                sys.stdout.write(line + "\n")
+                sys.stdout.flush()
             case _:
                 assert_never(event)
 

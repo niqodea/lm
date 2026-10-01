@@ -4,6 +4,7 @@ Ordered from the plainest intended usage down to the corners: the core loop
 first, then the documented workflows, then refusals and details.
 """
 
+import json
 from pathlib import Path
 
 from .conftest import Lm
@@ -992,7 +993,7 @@ def test_reply_reports_a_stream_without_a_result(lm: Lm) -> None:
 
 def test_reply_reports_a_result_it_cannot_read(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_result_raw({"type": "result", "is_error": "maybe"})
+    lm.set_claude_result_raw_line(json.dumps({"type": "result", "is_error": "maybe"}))
 
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("reply", "--thread", "demo", stdin="")
@@ -1003,9 +1004,25 @@ def test_reply_reports_a_result_it_cannot_read(lm: Lm) -> None:
     assert "what is 2+2?" in status_result.stdout
 
 
+def test_reply_reports_a_line_that_is_not_json(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_result_raw_line("Warning: something went sideways")
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
+    status_result = lm.invoke("status", "--thread", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "claude sent a line that is not JSON" in result.stderr
+    assert "lm commit -t demo" in result.stderr
+    assert "what is 2+2?" in status_result.stdout
+
+
 def test_reply_ignores_an_event_it_does_not_use(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
-    lm.set_claude_result_success_after_raw_event({"type": "rate_limit_event"}, "4")
+    lm.set_claude_result_success_after_raw_line(
+        json.dumps({"type": "rate_limit_event"}), "4"
+    )
 
     lm.invoke("new", "demo", stdin="")
     result = lm.invoke("reply", "--thread", "demo", stdin="")

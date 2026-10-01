@@ -117,18 +117,16 @@ class Lm:
             protocol.ClaudeSuccess(),
         )
 
-    def set_claude_result_success_after_raw_event(
-        self, event: dict[str, object], text: str
-    ) -> None:
-        """Make the claude stub send this event as it is, then answer normally."""
+    def set_claude_result_success_after_raw_line(self, line: str, text: str) -> None:
+        """Make the claude stub print this line as it is, then answer normally."""
         self._set_claude_run(
-            (protocol.ClaudeRawEvent(event=event), protocol.ClaudeText(text=text)),
+            (protocol.ClaudeRawLine(line=line), protocol.ClaudeText(text=text)),
             protocol.ClaudeSuccess(),
         )
 
-    def set_claude_result_raw(self, event: dict[str, object]) -> None:
-        """Make the claude stub end the turn with this event, as it is."""
-        self._set_claude_run((protocol.ClaudeRawEvent(event=event),), None)
+    def set_claude_result_raw_line(self, line: str) -> None:
+        """Make the claude stub end the turn with this line, as it is."""
+        self._set_claude_run((protocol.ClaudeRawLine(line=line),), None)
 
     def set_claude_result_error(
         self, text: str, subtype: str, errors: list[str]
