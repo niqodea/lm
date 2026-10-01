@@ -1025,6 +1025,8 @@ def _write_prompt(prompt_path: Path, prompt: str) -> None:
 def _commit_staged(thread: _Thread, response: str) -> None:
     turn = _Turn(thread.get_turn_path(_get_turns_count(thread)))
 
+    # TODO: Make this atomic, as a crash before the response is written leaves a
+    # turn without one
     thread.staged_path.rename(turn.path)
 
     for path in turn.path.rglob("*"):
@@ -1559,6 +1561,8 @@ class _ClaudeContext:
             path.unlink()
 
         if exception_type is None:
+            # TODO: Make this atomic with the commit, as a crash in between leaves
+            # a staged query whose prompt is already in the session
             lines_count = self._thread_session_path.read_text().count("\n")
             added_lines_count = lines_count - sum(self._turn_lines_counts)
             _write_turn_lines_counts(
