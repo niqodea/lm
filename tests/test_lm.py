@@ -1041,6 +1041,14 @@ def test_an_invalid_thread_name_is_rejected(lm: Lm) -> None:
     assert "Invalid thread name" in result.stderr
 
 
+def test_a_thread_name_with_a_tab_is_rejected(lm: Lm) -> None:
+    result = lm.invoke("new", "two\tparts", stdin="")
+
+    assert result.returncode != 0
+    assert "Invalid thread name" in result.stderr
+    assert not lm.get_thread_path("two\tparts").exists()
+
+
 def test_an_unknown_system_prompt_is_rejected(lm: Lm) -> None:
     result = lm.invoke("new", "demo", "--system-prompt", "missing", stdin="")
 

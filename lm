@@ -964,6 +964,9 @@ def _truncate_session(session_path: Path, turn_lines_counts: tuple[int, ...]) ->
 def _assert_thread_name_is_valid(name: str) -> None:
     if name == "" or name in {".", ".."} or name.startswith(".") or "/" in name:
         sys.exit(f"Invalid thread name: {name}")
+    # ls prints one thread per line, and fzf splits each line on tabs
+    if not name.isprintable():
+        sys.exit(f"Invalid thread name: {name!r}")
 
 
 def _assert_thread_doesnt_exist(path: Path) -> None:
