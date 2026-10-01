@@ -1306,49 +1306,33 @@ def _read_response(
 
     stream = _ResponseStream(char_delay_seconds=char_delay_seconds)
     for line in process.stdout:
-        event = json.loads(line)
+        try:
+            events = _ClaudeOutput.parse_line(line)
+        except _ClaudeOutput.UnreadableEventError as error:
+            sys.exit(
+                _format_inference_failure(detail=str(error), thread_name=thread_name)
+            )
 
-        match event["type"]:
-            # The result event ends the run, and its is_error says whether the
-            # turn succeeded.
-            # Ref: https://code.claude.com/docs/en/agent-sdk/typescript#sdkresultmessage
-            case "result":
-                if event.get("is_error") is True:
-                    detail = _get_failure_detail(
-                        errors=event.get("errors", []),
-                        error_subtype=event.get("subtype"),
-                    )
+        for event in events:
+            match event:
+                case _ClaudeOutput.TextDelta(text=text):
+                    stream.write_text(text)
+                case _ClaudeOutput.ToolCall(name=name, arguments=arguments):
+                    stream.write_tool_call(_format_tool_call(name, arguments))
+                case _ClaudeOutput.Compaction(pre_tokens=pre_tokens):
+                    stream.write_notice(f"Compacted session at {pre_tokens} tokens")
+                case _ClaudeOutput.Success():
+                    stream.end()
+                    return stream.get_text()
+                case _ClaudeOutput.Failure(errors=errors, subtype=subtype):
+                    detail = _get_failure_detail(errors=errors, error_subtype=subtype)
                     sys.exit(
                         _format_inference_failure(
                             detail=detail, thread_name=thread_name
                         )
                     )
-                stream.end()
-                return stream.get_text()
-            # Claude summarizes the history once it grows too long. The turns on
-            # disk still hold every exchange, but it stops sending them all.
-            case "system" if event.get("subtype") == "compact_boundary":
-                pre_tokens = event["compact_metadata"]["pre_tokens"]
-                stream.write_notice(f"Compacted session at {pre_tokens} tokens")
-            # Claude reports each block of a message once it is whole, so a
-            # complete tool call arrives in one piece.
-            case "assistant":
-                for content_block in event["message"]["content"]:
-                    if content_block["type"] == "tool_use":
-                        call = _format_tool_call(
-                            content_block["name"], content_block["input"]
-                        )
-                        stream.write_tool_call(call)
-            case "stream_event":
-                stream_event = event["event"]
-                if (
-                    stream_event["type"] == "content_block_delta"
-                    and stream_event["delta"]["type"] == "text_delta"
-                ):
-                    stream.write_text(stream_event["delta"]["text"])
-            # Claude streams more kinds of events than a turn needs
-            case _:
-                pass
+                case _:
+                    assert_never(event)
 
     # Every result event returns or exits, so the stream ended without one.
     process.wait()
@@ -1360,7 +1344,126 @@ def _read_response(
     )
 
 
-def _get_failure_detail(*, errors: list[str], error_subtype: str | None) -> str:
+class _ClaudeOutput:
+    """The events claude prints during a turn, as far as lm reads them."""
+
+    @dataclass(frozen=True)
+    class TextDelta:
+        """The next piece of the response text."""
+
+        text: str
+
+    @dataclass(frozen=True)
+    class ToolCall:
+        """A tool claude ran during the turn."""
+
+        name: str
+        # Whatever the tool takes, so the keys are the tool's rather than ours
+        arguments: Mapping[str, object]
+
+    @dataclass(frozen=True)
+    class Compaction:
+        """Claude summarizing the history of the session."""
+
+        pre_tokens: int
+
+    @dataclass(frozen=True)
+    class Success:
+        """The end of a turn that worked."""
+
+    @dataclass(frozen=True)
+    class Failure:
+        """The end of a turn that failed."""
+
+        errors: tuple[str, ...]
+        subtype: str | None
+
+    type Event = TextDelta | ToolCall | Compaction | Success | Failure
+
+    class UnreadableEventError(Exception):
+        """An event lm reads, in a shape lm cannot read."""
+
+    @staticmethod
+    def parse_line(line: str) -> tuple[_ClaudeOutput.Event, ...]:
+        event = json.loads(line)
+        match event:
+            # The result event ends the run, and its is_error says whether the
+            # turn succeeded.
+            # Ref: https://code.claude.com/docs/en/agent-sdk/typescript#sdkresultmessage
+            case {"type": "result", "is_error": False}:
+                return (_ClaudeOutput.Success(),)
+            case {"type": "result", "is_error": True}:
+                errors = event.get("errors", [])
+                subtype = event.get("subtype")
+                if not isinstance(errors, list) or not all(
+                    isinstance(error, str) for error in errors
+                ):
+                    message = f"claude sent errors that are not text: {errors}"
+                    raise _ClaudeOutput.UnreadableEventError(message)
+                if subtype is not None and not isinstance(subtype, str):
+                    message = f"claude sent a subtype that is not text: {subtype}"
+                    raise _ClaudeOutput.UnreadableEventError(message)
+                return (_ClaudeOutput.Failure(errors=tuple(errors), subtype=subtype),)
+            # Claude summarizes the history once it grows too long. The turns on
+            # disk still hold every exchange, but it stops sending them all.
+            case {
+                "type": "system",
+                "subtype": "compact_boundary",
+                "compact_metadata": {"pre_tokens": int(pre_tokens)},
+            }:
+                return (_ClaudeOutput.Compaction(pre_tokens=pre_tokens),)
+            # Claude reports each block of a message once it is whole, so a
+            # complete tool call arrives in one piece.
+            case {"type": "assistant", "message": {"content": [*content_blocks]}}:
+                calls: list[_ClaudeOutput.Event] = []
+                for content_block in content_blocks:
+                    match content_block:
+                        case {
+                            "type": "tool_use",
+                            "name": str(name),
+                            "input": dict(arguments),
+                        }:
+                            call = _ClaudeOutput.ToolCall(
+                                name=name, arguments=arguments
+                            )
+                            calls.append(call)
+                        case {"type": "tool_use"}:
+                            message = (
+                                "claude sent a tool call lm cannot read: "
+                                f"{content_block}"
+                            )
+                            raise _ClaudeOutput.UnreadableEventError(message)
+                        # Text and thinking arrive as deltas instead
+                        case _:
+                            pass
+                return tuple(calls)
+            case {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": str(text)},
+                },
+            }:
+                return (_ClaudeOutput.TextDelta(text=text),)
+            case (
+                {"type": "result" | "assistant"}
+                | {"type": "system", "subtype": "compact_boundary"}
+                | {
+                    "type": "stream_event",
+                    "event": {
+                        "type": "content_block_delta",
+                        "delta": {"type": "text_delta"},
+                    },
+                }
+            ):
+                message = f"claude sent a {event['type']} event lm cannot read"
+                raise _ClaudeOutput.UnreadableEventError(message)
+            # Claude streams more kinds of events than a turn needs
+            case _:
+                return ()
+
+
+def _get_failure_detail(*, errors: tuple[str, ...], error_subtype: str | None) -> str:
     if len(errors) > 0:
         return "; ".join(errors)
     if error_subtype is None:
@@ -1378,7 +1481,7 @@ def _format_inference_failure(*, detail: str, thread_name: str) -> str:
     )
 
 
-def _format_tool_call(name: str, arguments: dict[str, object]) -> str:
+def _format_tool_call(name: str, arguments: Mapping[str, object]) -> str:
     formatted_arguments: list[str] = []
     for argument, value in arguments.items():
         summary = _summarize_text(

@@ -979,6 +979,30 @@ def test_reply_reports_a_stream_without_a_result(lm: Lm) -> None:
     assert not list(lm.get_thread_path("demo").glob("[0-9]*"))
 
 
+def test_reply_reports_a_result_it_cannot_read(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_result_raw({"type": "result", "is_error": "maybe"})
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
+    status_result = lm.invoke("status", "--thread", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "claude sent a result event lm cannot read" in result.stderr
+    assert "what is 2+2?" in status_result.stdout
+
+
+def test_reply_ignores_an_event_it_does_not_use(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_result_success_after_raw_event({"type": "rate_limit_event"}, "4")
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
+
+    assert result.returncode == 0
+    assert (lm.get_turn_path("demo", 0) / "response.md").read_text() == "4\n"
+
+
 def test_reply_refuses_with_a_staged_query(lm: Lm) -> None:
     lm.set_editor_prompt("staged question\n")
 

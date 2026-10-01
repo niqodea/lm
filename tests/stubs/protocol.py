@@ -60,8 +60,16 @@ class ClaudeCompaction:
     pre_tokens: int
 
 
+@dataclass(frozen=True)
+class ClaudeRawEvent:
+    """Write this event as it is, whatever shape it has."""
+
+    # Any shape at all, since the point is to send one lm does not expect
+    event: dict[str, object]
+
+
 # A run plays these in order, before it ends the turn
-ClaudeEvent = ClaudeText | ClaudeToolCall | ClaudeCompaction
+ClaudeEvent = ClaudeText | ClaudeToolCall | ClaudeCompaction | ClaudeRawEvent
 
 
 @dataclass(frozen=True)
@@ -100,6 +108,8 @@ class ClaudeScript:
                     )
                 case ClaudeCompaction(pre_tokens=pre_tokens):
                     events.append({"kind": "compaction", "pre_tokens": pre_tokens})
+                case ClaudeRawEvent(event=raw_event):
+                    events.append({"kind": "raw", "event": raw_event})
                 case _:
                     assert_never(event)
         ending: dict[str, object] | None
@@ -126,6 +136,8 @@ class ClaudeScript:
                     events.append(ClaudeToolCall(name=name, arguments=arguments))
                 case {"kind": "compaction", "pre_tokens": pre_tokens}:
                     events.append(ClaudeCompaction(pre_tokens=pre_tokens))
+                case {"kind": "raw", "event": raw_event}:
+                    events.append(ClaudeRawEvent(event=raw_event))
                 case _:
                     raise ValueError(f"Unknown event in claude script: {event}")
         ending: ClaudeEnding
