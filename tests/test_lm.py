@@ -1031,6 +1031,36 @@ def test_reply_ignores_an_event_it_does_not_use(lm: Lm) -> None:
     assert (lm.get_turn_path("demo", 0) / "response.md").read_text() == "4\n"
 
 
+def test_a_first_turn_without_a_session_stays_staged(lm: Lm) -> None:
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.set_claude_result_success_without_session("4")
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
+    status_result = lm.invoke("status", "--thread", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "Claude wrote no session" in result.stderr
+    assert "what is 2+2?" in status_result.stdout
+
+
+def test_a_later_turn_that_adds_nothing_to_the_session_stays_staged(lm: Lm) -> None:
+    lm.set_claude_result_success("4")
+
+    lm.invoke("new", "demo", stdin="")
+    lm.set_editor_prompt("what is 2+2?\n")
+    lm.invoke("reply", "--thread", "demo", stdin="")
+    lm.set_editor_prompt("and 3+3?\n")
+    lm.set_claude_result_success_without_session("6")
+    result = lm.invoke("reply", "--thread", "demo", stdin="")
+    status_result = lm.invoke("status", "--thread", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "Claude added nothing to the session" in result.stderr
+    assert "and 3+3?" in status_result.stdout
+    assert len(list(lm.get_thread_path("demo").glob("[0-9]*"))) == 1
+
+
 def test_reply_refuses_with_a_staged_query(lm: Lm) -> None:
     lm.set_editor_prompt("staged question\n")
 

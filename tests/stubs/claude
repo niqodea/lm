@@ -18,6 +18,7 @@ from protocol import (
     ClaudeRawLine,
     ClaudeScript,
     ClaudeSuccess,
+    ClaudeSuccessWithoutSession,
     ClaudeText,
     ClaudeToolCall,
     SessionTurn,
@@ -70,6 +71,10 @@ def main() -> None:
             _write_event({"type": "result", "subtype": "success", "is_error": False})
             _wait_for_caller_to_stop_reading()
             returncode = 0
+        case ClaudeSuccessWithoutSession():
+            _write_event({"type": "result", "subtype": "success", "is_error": False})
+            _wait_for_caller_to_stop_reading()
+            sys.exit(0)
         case ClaudeError(subtype=subtype, errors=errors):
             _write_event(
                 {

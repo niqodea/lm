@@ -77,6 +77,11 @@ class ClaudeSuccess:
 
 
 @dataclass(frozen=True)
+class ClaudeSuccessWithoutSession:
+    """End the turn as a run that worked, without writing to the session."""
+
+
+@dataclass(frozen=True)
 class ClaudeError:
     """End the turn as a run that failed this way."""
 
@@ -85,7 +90,7 @@ class ClaudeError:
 
 
 # A run that ends with neither stops without reporting a result at all
-ClaudeEnding = ClaudeSuccess | ClaudeError | None
+ClaudeEnding = ClaudeSuccess | ClaudeSuccessWithoutSession | ClaudeError | None
 
 
 @dataclass(frozen=True)
@@ -115,6 +120,8 @@ class ClaudeScript:
         match self.ending:
             case ClaudeSuccess():
                 ending = {"kind": "success"}
+            case ClaudeSuccessWithoutSession():
+                ending = {"kind": "success_without_session"}
             case ClaudeError(subtype=subtype, errors=errors):
                 ending = {"kind": "error", "subtype": subtype, "errors": list(errors)}
             case None:
@@ -143,6 +150,8 @@ class ClaudeScript:
         match script["ending"]:
             case {"kind": "success"}:
                 ending = ClaudeSuccess()
+            case {"kind": "success_without_session"}:
+                ending = ClaudeSuccessWithoutSession()
             case {"kind": "error", "subtype": subtype, "errors": errors}:
                 ending = ClaudeError(subtype=subtype, errors=tuple(errors))
             case None:

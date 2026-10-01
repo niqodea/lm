@@ -1671,10 +1671,25 @@ class _ClaudeContext:
             path.unlink()
 
         if exception_type is None:
-            # TODO: Make this atomic with the commit, as a crash in between leaves
-            # a staged query whose prompt is already in the session
+            # lm looks for the session where claude kept it so far, which the docs
+            # describe but do not promise, so a turn that grew no session there
+            # means claude keeps it elsewhere now
+            # Ref: https://code.claude.com/docs/en/sessions#where-transcripts-are-stored
+            if not self._thread_session_path.exists():
+                sys.exit(
+                    f"Claude wrote no session at {self._claude_session_path}.\n"
+                    "Your query is still staged."
+                )
             lines_count = self._thread_session_path.read_text().count("\n")
             added_lines_count = lines_count - sum(self._turn_lines_counts)
+            if added_lines_count <= 0:
+                sys.exit(
+                    f"Claude added nothing to the session at "
+                    f"{self._claude_session_path}.\n"
+                    "Your query is still staged."
+                )
+            # TODO: Make this atomic with the commit, as a crash in between leaves
+            # a staged query whose prompt is already in the session
             _write_turn_lines_counts(
                 self._thread_session_lines_path,
                 (*self._turn_lines_counts, added_lines_count),

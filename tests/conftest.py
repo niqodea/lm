@@ -88,6 +88,12 @@ class Lm:
             (protocol.ClaudeText(text=text),), protocol.ClaudeSuccess()
         )
 
+    def set_claude_result_success_without_session(self, text: str) -> None:
+        """Make the claude stub answer, but leave the session untouched."""
+        self._set_claude_run(
+            (protocol.ClaudeText(text=text),), protocol.ClaudeSuccessWithoutSession()
+        )
+
     def set_claude_result_success_with_tool_calls(
         self,
         text_before: str,
