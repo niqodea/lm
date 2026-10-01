@@ -618,6 +618,17 @@ def test_edit_prompt_stages_a_prompt(lm: Lm) -> None:
     assert "staged question" in status_result.stdout
 
 
+def test_an_abandoned_edit_prompt_leaves_nothing_staged(lm: Lm) -> None:
+    lm.set_editor_prompt("")
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke("edit-prompt", "--thread", "demo", stdin="")
+    status_result = lm.invoke("status", "--thread", "demo", stdin="")
+
+    assert result.returncode != 0
+    assert "Nothing staged." in status_result.stdout
+
+
 def test_status_shows_the_staged_query(lm: Lm, tmp_path: Path) -> None:
     lm.set_editor_prompt("staged question\n")
     attachment_path = tmp_path / "notes.md"
