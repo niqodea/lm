@@ -512,8 +512,6 @@ def _execute_edit_prompt(args: argparse.Namespace, env: _Environment) -> None:
     preset_name: str | None = args.preset
 
     staged = _Query(thread.staged_path)
-    staged.path.mkdir(exist_ok=True)
-
     staged_prompt_path = staged.prompt_path
 
     match staged_prompt_path.exists(), preset_name:
@@ -538,7 +536,10 @@ def _execute_edit_prompt(args: argparse.Namespace, env: _Environment) -> None:
     except _EmptyPromptError:
         sys.exit("Prompt is empty, exiting.")
 
-    _write_prompt(staged.prompt_path, prompt)
+    # Created only once there is a prompt, so abandoning the editor leaves
+    # nothing staged to block the next reply
+    staged.path.mkdir(exist_ok=True)
+    _write_prompt(staged_prompt_path, prompt)
 
 
 def _execute_attach(args: argparse.Namespace, env: _Environment) -> None:
