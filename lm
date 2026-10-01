@@ -316,7 +316,7 @@ def _execute_init(_: argparse.Namespace, env: _Environment) -> None:
     data_path = env.data_path
 
     if not config_path.exists():
-        config_path.mkdir()
+        config_path.mkdir(parents=True)
         (config_path / SETTINGS_PATHNAME).touch()
         (config_path / PRESETS_PATHNAME).mkdir()
         (config_path / SYSTEM_PROMPTS_PATHNAME).mkdir()
@@ -324,7 +324,7 @@ def _execute_init(_: argparse.Namespace, env: _Environment) -> None:
         default_system_prompt_path.write_text(DEFAULT_SYSTEM_PROMPT)
 
     if not data_path.exists():
-        data_path.mkdir()
+        data_path.mkdir(parents=True)
         (data_path / THREADS_PATHNAME).mkdir()
 
 
