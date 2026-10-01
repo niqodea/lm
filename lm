@@ -1690,15 +1690,19 @@ def _write_paged(content: str, *, pager: str) -> None:
     # A short output prints and exits like cat does, and stays on screen after
     # less quits: --quit-if-one-screen --RAW-CONTROL-CHARS --no-init
     pager_env.setdefault("LESS", "-FRX")
-    with subprocess.Popen(  # noqa: S603  (running the user pager expected to be safe)
-        pager,
-        stdin=subprocess.PIPE,
+
+    pager_command = shlex.split(pager)
+    if len(pager_command) == 0:
+        sys.exit("Pager is empty.")
+
+    # Quitting the pager before the end closes the pipe, which run ignores
+    subprocess.run(  # noqa: S603  (running the user pager expected to be safe)
+        pager_command,
+        input=content,
         text=True,
         env=pager_env,
-    ) as pager_process:
-        if pager_process.stdin is None:
-            sys.exit("Unexpected error: Pager standard input not captured")
-        pager_process.stdin.write(content)
+        check=False,
+    )
 
 
 def _format_thread_summary_line(thread: _Thread) -> str:
