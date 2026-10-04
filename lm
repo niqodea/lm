@@ -1328,6 +1328,10 @@ def _read_response(
     if process.stdout is None:
         sys.exit("Unexpected error: Claude standard output not captured")
 
+    # claude prints one JSON event per line, in the shapes its docs describe, so
+    # the fields are read where they arrive, without checking them first. An
+    # event in another shape raises here, and the query stays staged.
+    # Ref: https://code.claude.com/docs/en/headless#stream-responses
     stream = _ResponseStream(char_delay_seconds=char_delay_seconds)
     for line in process.stdout:
         event = json.loads(line)
@@ -1563,6 +1567,9 @@ class _ClaudeContext:
         if exception_type is None:
             # TODO: Make this atomic with the commit, as a crash in between leaves
             # a staged query whose prompt is already in the session
+            # claude keeps the session where its docs describe, and appends this
+            # turn to it, so the lines past the earlier turns are this turn's
+            # Ref: https://code.claude.com/docs/en/sessions#where-transcripts-are-stored
             lines_count = self._thread_session_path.read_text().count("\n")
             added_lines_count = lines_count - sum(self._turn_lines_counts)
             _write_turn_lines_counts(
