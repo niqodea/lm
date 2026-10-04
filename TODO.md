@@ -10,8 +10,6 @@
 - Consider exposing json structured output as option.
   What would be the best interface for it?
 - Consider whether to have more than just data as local, like git does (e.g. config overrides).
-- Make the system prompt a thread setting, like model, effort and tools.
-  Presets are a different thing: they seed the editor buffer, not the turn.
 # Aspirational
 - Metacommands for thread management (Claude understands which thread to clean, which to rename, etc. and comes up with a plan).
   Should this reside in this tool? Perhaps we could consider differentiating this tool (plain lm) vs self-referential utilities (organizing threads is the obvious use case for now).
