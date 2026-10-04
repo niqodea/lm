@@ -1034,6 +1034,37 @@ def test_an_unknown_system_prompt_is_rejected(lm: Lm) -> None:
     assert not lm.get_thread_path("demo").exists()
 
 
+def test_an_attachment_claude_would_cut_short_is_rejected(
+    lm: Lm, tmp_path: Path
+) -> None:
+    attachment_path = tmp_path / "long.txt"
+    attachment_path.write_text("line\n" * 2001)
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke(
+        "reply", "--thread", "demo", "--attach", str(attachment_path), stdin=""
+    )
+
+    assert result.returncode != 0
+    assert "Attachment has more than 2000 lines" in result.stderr
+
+
+def test_an_attachment_that_is_not_text_is_not_counted_in_lines(
+    lm: Lm, tmp_path: Path
+) -> None:
+    lm.set_editor_prompt("look at this\n")
+    lm.set_claude_result_success("seen it")
+    attachment_path = tmp_path / "photo.png"
+    attachment_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\xff\n" * 2001)
+
+    lm.invoke("new", "demo", stdin="")
+    result = lm.invoke(
+        "reply", "--thread", "demo", "--attach", str(attachment_path), stdin=""
+    )
+
+    assert result.returncode == 0
+
+
 def test_an_alias_that_leaves_the_attachments_is_rejected(
     lm: Lm, tmp_path: Path
 ) -> None:

@@ -29,6 +29,9 @@ THREADS_PATHNAME = "threads"
 NEW_THREAD_EDITMSG_PATHNAME_TEMPLATE = ".{name}-EDITMSG.md"
 
 ATTACHMENT_MAX_SIZE_BYTES = 10 * 1024 * 1024
+# claude cuts an @ text file to its first 2000 lines without telling the model,
+# observed in 2.1.287
+ATTACHMENT_MAX_LINES = 2000
 
 SCISSORS_LINE = "<!-- ------------------------ >8 ------------------------ -->"
 
@@ -1100,6 +1103,17 @@ def _get_attachments(args: list[str]) -> list[_Attachment]:
             sys.exit(f"Attachment is a directory: {source_path}")
         if source_path.stat().st_size > ATTACHMENT_MAX_SIZE_BYTES:
             sys.exit(f"Attachment too large: {source_path}")
+        try:
+            lines_count = len(source_path.read_text().splitlines())
+        except UnicodeDecodeError:
+            # Not text, so claude takes it whole, as it does an image
+            pass
+        else:
+            if lines_count > ATTACHMENT_MAX_LINES:
+                sys.exit(
+                    f"Attachment has more than {ATTACHMENT_MAX_LINES} lines, "
+                    f"pipe it in instead: {source_path}"
+                )
         if any(attachment.alias == alias for attachment in attachments):
             sys.exit(f"Attachment alias given twice: {alias}")
         attachments.append(_Attachment(source_path=source_path, alias=alias))
