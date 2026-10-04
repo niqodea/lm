@@ -388,7 +388,7 @@ def _execute_reply(args: argparse.Namespace, env: _Environment) -> None:
     is_chat: bool = args.chat
     settings = _get_settings(config_path)
 
-    thread = _get_thread(args.thread_choice, threads_path)
+    thread = _use_thread(args.thread_choice, threads_path)
     _assert_no_staged_query(thread)
 
     try:
@@ -436,7 +436,7 @@ def _execute_rename(args: argparse.Namespace, env: _Environment) -> None:
     _assert_initialized(env)
     threads_path = env.data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args.thread_choice, threads_path)
+    thread = _use_thread(args.thread_choice, threads_path)
     destination: str = args.destination
 
     _assert_thread_name_is_valid(destination)
@@ -452,7 +452,7 @@ def _execute_rm(args: argparse.Namespace, env: _Environment) -> None:
     _assert_initialized(env)
     threads_path = env.data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args.thread_choice, threads_path)
+    thread = _use_thread(args.thread_choice, threads_path)
 
     # Each file is removed by name, so a file lm did not write makes rmdir fail
     # instead of being deleted with the thread
@@ -481,7 +481,7 @@ def _execute_undo(args: argparse.Namespace, env: _Environment) -> None:
     _assert_initialized(env)
     threads_path = env.data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args.thread_choice, threads_path)
+    thread = _use_thread(args.thread_choice, threads_path)
 
     turns_count = _get_turns_count(thread)
     if turns_count == 0:
@@ -508,7 +508,7 @@ def _execute_edit_prompt(args: argparse.Namespace, env: _Environment) -> None:
     config_path = env.config_path
     threads_path = env.data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args.thread_choice, threads_path)
+    thread = _use_thread(args.thread_choice, threads_path)
     preset_name: str | None = args.preset
 
     staged = _Query(thread.staged_path)
@@ -546,7 +546,7 @@ def _execute_attach(args: argparse.Namespace, env: _Environment) -> None:
     _assert_initialized(env)
     threads_path = env.data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args.thread_choice, threads_path)
+    thread = _use_thread(args.thread_choice, threads_path)
     attachments = _get_attachments(args.attachments)
 
     staged = _Query(thread.staged_path)
@@ -566,7 +566,7 @@ def _execute_commit(args: argparse.Namespace, env: _Environment) -> None:
     threads_path = env.data_path / THREADS_PATHNAME
 
     settings = _get_settings(config_path)
-    thread = _get_thread(args.thread_choice, threads_path)
+    thread = _use_thread(args.thread_choice, threads_path)
 
     staged = _Query(thread.staged_path)
     if not staged.path.exists():
@@ -600,7 +600,7 @@ def _execute_clear(args: argparse.Namespace, env: _Environment) -> None:
     _assert_initialized(env)
     threads_path = env.data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args.thread_choice, threads_path)
+    thread = _use_thread(args.thread_choice, threads_path)
 
     staged = _Query(thread.staged_path)
 
@@ -623,7 +623,7 @@ def _execute_show(args: argparse.Namespace, env: _Environment) -> None:
     _assert_initialized(env)
     threads_path = env.data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args.thread_choice, threads_path)
+    thread = _use_thread(args.thread_choice, threads_path)
 
     history = _build_history(thread)
     history_components = _format_history(history)
@@ -635,7 +635,7 @@ def _execute_status(args: argparse.Namespace, env: _Environment) -> None:
     _assert_initialized(env)
     threads_path = env.data_path / THREADS_PATHNAME
 
-    thread = _get_thread(args.thread_choice, threads_path)
+    thread = _use_thread(args.thread_choice, threads_path)
 
     status = _format_status(thread)
     _write_paged(status, pager=env.pager)
@@ -769,7 +769,7 @@ class _NamedThread:
 
 @dataclass(frozen=True)
 class _LastThread:
-    """The thread with the most recent activity."""
+    """The most recently used thread."""
 
 
 @dataclass(frozen=True)
@@ -796,7 +796,7 @@ def _add_thread_args(parser: argparse.ArgumentParser) -> None:
         dest="thread_choice",
         action="store_const",
         const=_LastThread(),
-        help="Use the last active thread.",
+        help="Use the most recently used thread.",
     )
     group.add_argument(
         "-s",
@@ -808,7 +808,8 @@ def _add_thread_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _get_thread(choice: _ThreadChoice, threads_path: Path) -> _Thread:
+def _use_thread(choice: _ThreadChoice, threads_path: Path) -> _Thread:
+    """Find the chosen thread, and make it the most recently used one."""
     match choice:
         case _NamedThread(name=name):
             thread_name = name
@@ -828,7 +829,9 @@ def _get_thread(choice: _ThreadChoice, threads_path: Path) -> _Thread:
     if not path.exists():
         sys.exit("Thread does not exist.")
 
-    return _Thread(path)
+    thread = _Thread(path)
+    _record_use(thread)
+    return thread
 
 
 def _select_thread(threads_path: Path) -> str:
@@ -857,14 +860,17 @@ def _select_thread(threads_path: Path) -> str:
 
 
 def _get_threads(threads_path: Path) -> list[_Thread]:
-    paths = sorted(
-        (path for path in threads_path.iterdir() if path.is_dir()),
-        # TODO: Record the time of the last activity in the thread, since the
-        # directory mtime misses changes made inside STAGED
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    return [_Thread(path) for path in paths]
+    """Every thread, the most recently used first."""
+    threads = [_Thread(path) for path in threads_path.iterdir() if path.is_dir()]
+    return sorted(threads, key=_get_last_use_time, reverse=True)
+
+
+def _get_last_use_time(thread: _Thread) -> float:
+    return thread.path.stat().st_mtime
+
+
+def _record_use(thread: _Thread) -> None:
+    os.utime(thread.path)
 
 
 @dataclass(frozen=True)
@@ -924,6 +930,7 @@ def _create_thread(path: Path, settings: _ThreadSettings) -> _Thread:
 
     thread.session_lines_path.touch()
 
+    _record_use(thread)
     return thread
 
 

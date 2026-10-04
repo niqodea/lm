@@ -311,6 +311,15 @@ def test_last_resumes_the_most_recent_thread(lm: Lm) -> None:
     assert (lm.get_turn_path("newer", 0) / "prompt.md").read_text() == "what is 2+2?\n"
 
 
+def test_last_picks_the_thread_used_most_recently(lm: Lm) -> None:
+    lm.invoke("new", "older", stdin="")
+    lm.invoke("new", "newer", stdin="")
+    lm.invoke("show", "--thread", "older", stdin="")
+    result = lm.invoke("status", "--last", stdin="")
+
+    assert "Thread: older\n" in result.stdout
+
+
 def test_select_picks_a_thread(lm: Lm) -> None:
     lm.set_editor_prompt("what is 2+2?\n")
     lm.set_claude_result_success("4")
