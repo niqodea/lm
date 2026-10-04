@@ -6,7 +6,7 @@ A minimal Claude CLI that runs on your Pro/Max subscription. You own the context
 
 `lm` gives you a tight loop: open your editor, write a prompt, get a response.
 
-No API key. No usage-based billing. Just your existing Claude subscription.
+No API key. No usage-based billing. Just your existing Claude subscription: `lm` runs the official `claude` CLI in its non-interactive mode, and never touches your login.
 
 ## Why not just use `claude`
 
@@ -48,7 +48,9 @@ make install   # copies lm to ~/.local/bin/lm
 lm init        # creates config and data directories
 ```
 
-Requires Python 3.14 and the [Claude CLI](https://github.com/anthropics/claude-code), installed and authenticated.
+Requires Python 3.14 and the [Claude CLI](https://github.com/anthropics/claude-code), installed and authenticated. `--select` also needs [fzf](https://github.com/junegunn/fzf).
+
+Tested with Claude Code 2.1.287 on macOS.
 
 ## Usage
 
